@@ -2,7 +2,7 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "devDependencies": {
     "@types/bun": "latest",
     "@types/chalk": "^2.2.4"
