@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process';
+import type { Connection } from './database';
 import { recordConnectionUsage } from './database';
 
 // Track the currently running SSH child-process so other parts of the program
@@ -9,23 +10,17 @@ export function isSshSessionActive(): boolean {
     return currentSshProcess !== null;
 }
 
-export function buildSSHArgs(user: string, host: string, key_path?: string, port?: string) {
-    const args = [
-        '-tt',
-        '-o', 'NumberOfPasswordPrompts=1',
-        '-o', 'ConnectTimeout=10',
-        '-o', 'ServerAliveInterval=15',
-        '-o', 'TCPKeepAlive=yes',
-    ];
-    if (key_path) args.push('-i', key_path);
-    if (port) args.push('-p', port);
-    args.push(`${user}@${host}`);
+export function buildSSHArgs(connection: Connection) {
+    const args = [];
+    if (connection.key_path) args.push('-i', connection.key_path);
+    if (connection.port) args.push('-p', connection.port);
+    args.push(`${connection.user}@${connection.host}`);
     return args;
 }
 
-export function runSSH(alias: string, user: string, host: string, key_path?: string, port?: string) {
+export function runSSH(alias: string, connection: Connection) {
     recordConnectionUsage(alias);
-    const args = buildSSHArgs(user, host, key_path, port);
+    const args = buildSSHArgs(connection);
 
     const sshProcess = spawn('ssh', args, {
         stdio: 'pipe', // Full control over stdio

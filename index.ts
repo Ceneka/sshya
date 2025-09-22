@@ -2,16 +2,20 @@
 
 import chalk from 'chalk';
 import { Command } from 'commander';
+import pkg from './package.json' assert { type: "json" };
 import { addConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
-import { connectInteractive } from './src/helpers/connectInteractive';
+import { connectInteractive, printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
+import { printFzfInstructions } from './src/helpers/fzf';
 import { handleSshCommand } from './src/sshCommandHandler';
 
-import pkg from './package.json' assert { type: "json" };
 const version = pkg?.version ?? '1.0.0';
 
-enableEscapeExit();
+if (process.stdin.isTTY && process.stdout.isTTY) {
+  enableEscapeExit();
+}
+
 initDB();
 
 const program = new Command();
@@ -26,6 +30,11 @@ program
   .action(connectInteractive);
 
 program
+  .command('print [alias]')
+  .description('Print an SSH connection by alias')
+  .action(printConnectionsPrompt);
+
+program
   .command('add')
   .aliases(['create', 'new'])
   .description('Add a new SSH connection')
@@ -35,7 +44,9 @@ program
   .command('list')
   .aliases(['ps', 'ls'])
   .description('List all SSH connections')
-  .action(listConnectionsPrompt);
+  .option('--oneline', 'Output each connection as ssh args on one line')
+  .option('--names', 'Include alias as first column (tab-separated) with --oneline')
+  .action((options: { oneline?: boolean; names?: boolean }) => listConnectionsPrompt({ oneline: !!options?.oneline, names: !!options?.names }));
 
 program
   .command('remove [alias]')
@@ -65,6 +76,14 @@ program
   .action(exportConnectionsPrompt);
 
 program
+  .command('fzf')
+  .aliases(['instructions', 'install'])
+  .description('Show instructions to enable fzf-based connection launcher')
+  .action(() => {
+    printFzfInstructions();
+  });
+
+program
   .command('path')
   .description('Provides instructions to make the CLI globally accessible')
   .action(() => {
@@ -92,20 +111,39 @@ program
     process.exit(0);
   });
 
-// Clean Bun compile shim arguments (e.g., "bun run index.ts") when running the compiled binary
-const rawArgs = process.argv.slice(2);
-const looksLikeBunShim = rawArgs[0] === 'bun' && rawArgs[1] === 'run';
-const userArgs = looksLikeBunShim ? rawArgs.slice(3) : rawArgs;
+// Helpers exported for testing primary dispatch logic
+export function normalizeUserArgs(rawArgv: string[]): string[] {
+  const looksLikeBunShim = rawArgv[0] === 'bun' && rawArgv[1] === 'run';
+  return looksLikeBunShim ? rawArgv.slice(3) : rawArgv;
+}
 
-const isSshCommand = userArgs.length > 0 && (userArgs[0] === 'ssh' || userArgs.some(arg => arg.includes('@')));
+export function determineEntryAction(userArgs: string[]): 'ssh' | 'interactive' | 'cli' {
+  const isSsh = userArgs.length > 0 && (userArgs[0] === 'ssh' || userArgs.some(arg => arg.includes('@')));
+  if (isSsh) return 'ssh';
+  if (userArgs.length === 0) return 'interactive';
+  return 'cli';
+}
 
-if (isSshCommand) {
-  await handleSshCommand(userArgs);
-} else if (userArgs.length === 0) {
-  // No user-specified subcommand -> interactive connect
-  await connectInteractive();
-} else {
+async function runFromProcess() {
+  // Clean Bun compile shim arguments (e.g., "bun run index.ts") when running the compiled binary
+  const rawArgs = process.argv.slice(2);
+  const userArgs = normalizeUserArgs(rawArgs);
+  const action = determineEntryAction(userArgs);
+
+  if (action === 'ssh') {
+    await handleSshCommand(userArgs);
+    return;
+  }
+  if (action === 'interactive') {
+    await connectInteractive();
+    return;
+  }
   // Reconstruct argv array expected by commander: [node, script, ...userArgs]
   const argvForCommander: string[] = [process.argv[0] ?? '', process.argv[1] ?? '', ...userArgs];
   program.parse(argvForCommander);
+}
+
+// Only execute when this module is the entrypoint (prevents side effects during tests)
+if (import.meta.main) {
+  await runFromProcess();
 }

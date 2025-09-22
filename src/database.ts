@@ -6,7 +6,7 @@ import { z } from 'zod';
 const dbDir = path.join(os.homedir(), '.sshya');
 const dbFilePath = path.join(dbDir, 'sshm.json');
 
-interface Connection {
+export interface Connection {
   id: number;
   alias: string;
   user: string;

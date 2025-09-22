@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { getConnectionByAlias } from "../database";
-import { runSSH } from "../ssh";
+import { buildSSHArgs, runSSH } from "../ssh";
 import { selectAlias } from "./selectAlias";
 
 /**
@@ -12,8 +12,20 @@ export async function connectInteractive(alias?: string) {
   }
   const connection = getConnectionByAlias(alias);
   if (connection) {
-    const { user, host, key_path, port } = connection;
-    runSSH(alias, user, host, key_path, port);
+    runSSH(alias, connection);
+  } else {
+    console.error(chalk.red('Alias not found'));
+  }
+}
+
+export async function printConnectionsPrompt(alias?: string) {
+  if (!alias) {
+    alias = await selectAlias('Select a connection');
+  }
+  const connection = getConnectionByAlias(alias);
+  if (connection) {
+    let args = buildSSHArgs(connection);
+    console.log(args.join(' '));
   } else {
     console.error(chalk.red('Alias not found'));
   }

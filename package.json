@@ -12,7 +12,7 @@
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --compile --outfile bin/s"
+    "build": "bun build index.ts --compile --outfile bin/sshya"
   },
   "dependencies": {
     "@inquirer/search": "^3.0.17",

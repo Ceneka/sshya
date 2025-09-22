@@ -1,8 +1,32 @@
 import chalk from "chalk";
 import { getConnections } from "../database";
 
-export async function listConnectionsPrompt() {
+export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
     const connections = getConnections();
+    if (options?.oneline) {
+        // Print each connection as ssh-ready args on a single line
+        for (const c of connections) {
+            const parts: string[] = [];
+            if (c.key_path) {
+                // Safely single-quote the key path for shells
+                const quotedKey = `'${String(c.key_path).replace(/'/g, "'\\''")}'`;
+                parts.push('-i', quotedKey);
+            }
+            if (c.port) {
+                parts.push('-p', String(c.port));
+            }
+            parts.push(`${c.user}@${c.host}`);
+            const args = parts.join(' ');
+            if (options?.names) {
+                // Tab-separated: alias<TAB>user@host<TAB>args for easy fzf display and parsing
+                console.log(`${c.alias}\t${c.user}@${c.host}\t${args}`);
+            } else {
+                console.log(args);
+            }
+        }
+        process.exit(0);
+    }
+
     if (connections.length === 0) {
         console.log(chalk.yellow('No connections found. Add one with "sshya add"'));
         return;
