@@ -1,5 +1,4 @@
 import readline from 'readline';
-import { isSshSessionActive } from '../ssh';
 
 /**
  * Enable global Escape key handler that terminates the CLI gracefully.
@@ -16,12 +15,7 @@ export function enableEscapeExit(): () => void {
     }
 
     const onKeypress = (_: string, key: readline.Key) => {
-        // Handle ESC key – ignored while an SSH session is active so that
-        // pressing Escape inside the remote shell works as expected.
         if (key.name === 'escape') {
-            if (isSshSessionActive()) {
-                return; // let the remote shell receive the key
-            }
             console.log('\nCancelled by user.');
             process.exit(0);
         }
@@ -32,9 +26,6 @@ export function enableEscapeExit(): () => void {
         // their usual shortcut inside the SSH client, so we don’t force-exit
         // the parent app in that case.
         if (key.ctrl && key.name === 'c') {
-            if (isSshSessionActive()) {
-                return; // let ssh handle the interrupt
-            }
             console.log('\nCancelled by user.');
             process.exit(0);
         }

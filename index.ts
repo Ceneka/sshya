@@ -5,10 +5,10 @@ import { Command } from 'commander';
 import pkg from './package.json' assert { type: "json" };
 import { addConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
-import { connectInteractive, printConnectionsPrompt } from './src/helpers/connection';
+import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
 import { printFzfInstructions } from './src/helpers/fzf';
-import { handleSshCommand } from './src/sshCommandHandler';
+// built-in SSH handler removed
 
 const version = pkg?.version ?? '1.0.0';
 
@@ -24,10 +24,7 @@ program
   .version(version)
   .description('A simple CLI to manage your SSH connections');
 
-program
-  .command('connect [alias]')
-  .description('Connect to an SSH connection by alias')
-  .action(connectInteractive);
+// connect command removed – use system ssh via fzf snippet
 
 program
   .command('print [alias]')
@@ -117,27 +114,11 @@ export function normalizeUserArgs(rawArgv: string[]): string[] {
   return looksLikeBunShim ? rawArgv.slice(3) : rawArgv;
 }
 
-export function determineEntryAction(userArgs: string[]): 'ssh' | 'interactive' | 'cli' {
-  const isSsh = userArgs.length > 0 && (userArgs[0] === 'ssh' || userArgs.some(arg => arg.includes('@')));
-  if (isSsh) return 'ssh';
-  if (userArgs.length === 0) return 'interactive';
-  return 'cli';
-}
 
 async function runFromProcess() {
   // Clean Bun compile shim arguments (e.g., "bun run index.ts") when running the compiled binary
   const rawArgs = process.argv.slice(2);
   const userArgs = normalizeUserArgs(rawArgs);
-  const action = determineEntryAction(userArgs);
-
-  if (action === 'ssh') {
-    await handleSshCommand(userArgs);
-    return;
-  }
-  if (action === 'interactive') {
-    await connectInteractive();
-    return;
-  }
   // Reconstruct argv array expected by commander: [node, script, ...userArgs]
   const argvForCommander: string[] = [process.argv[0] ?? '', process.argv[1] ?? '', ...userArgs];
   program.parse(argvForCommander);
