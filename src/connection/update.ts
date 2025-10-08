@@ -37,8 +37,14 @@ export async function updateConnectionPrompt(alias?: string) {
                 message: 'Path to key (optional):',
                 default: connection.key_path,
             },
+            {
+                type: 'input',
+                name: 'remote_path',
+                message: 'Remote working directory (optional):',
+                default: connection.remote_path,
+            },
         ]);
-        updateConnection(alias, answers.user, answers.host, answers.key_path, answers.port);
+        updateConnection(alias, answers.user, answers.host, answers.key_path, answers.port, answers.remote_path);
         console.log(chalk.green('Connection updated successfully'));
 
         const { test } = await inquirer.prompt([

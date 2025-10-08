@@ -50,11 +50,25 @@ export const importConnectionsPrompt = async (file: string) => {
                 }
 
                 if (action === 'Overwrite') {
-                    updateConnection(parsedConn.alias, parsedConn.user, parsedConn.host, parsedConn.key_path ?? '', parsedConn.port ? String(parsedConn.port) : undefined);
+                    updateConnection(
+                        parsedConn.alias,
+                        parsedConn.user,
+                        parsedConn.host,
+                        parsedConn.key_path ?? '',
+                        parsedConn.port ? String(parsedConn.port) : undefined,
+                        parsedConn.remote_path,
+                    );
                     updatedCount++;
                 }
             } else {
-                addConnection(parsedConn.alias, parsedConn.user, parsedConn.host, parsedConn.key_path, parsedConn.port ? String(parsedConn.port) : undefined);
+                addConnection(
+                    parsedConn.alias,
+                    parsedConn.user,
+                    parsedConn.host,
+                    parsedConn.key_path,
+                    parsedConn.port ? String(parsedConn.port) : undefined,
+                    parsedConn.remote_path,
+                );
                 importedCount++;
             }
         }

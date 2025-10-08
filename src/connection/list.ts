@@ -1,5 +1,6 @@
 import chalk from "chalk";
-import { getConnections } from "../database";
+import { expandHomePath, getConnections } from "../database";
+import { buildRemoteCommand } from "../helpers/shell";
 
 export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
     const connections = getConnections();
@@ -8,14 +9,24 @@ export async function listConnectionsPrompt(options?: { oneline?: boolean; names
         for (const c of connections) {
             const parts: string[] = [];
             if (c.key_path) {
+                const expandedKeyPath = expandHomePath(String(c.key_path));
                 // Safely single-quote the key path for shells
-                const quotedKey = `'${String(c.key_path).replace(/'/g, "'\\''")}'`;
+                const quotedKey = `'${String(expandedKeyPath).replace(/'/g, "'\\''")}'`;
                 parts.push('-i', quotedKey);
             }
             if (c.port) {
                 parts.push('-p', String(c.port));
             }
             parts.push(`${c.user}@${c.host}`);
+            if (c.remote_path) {
+                const remoteCommand = buildRemoteCommand({
+                    remotePath: String(c.remote_path),
+                    postCommand: 'exec "$SHELL" -l',
+                });
+                if (remoteCommand) {
+                    parts.push('-t', remoteCommand);
+                }
+            }
             const args = parts.join(' ');
             if (options?.names) {
                 // Tab-separated: alias<TAB>user@host<TAB>args for easy fzf display and parsing

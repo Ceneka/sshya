@@ -1,7 +1,8 @@
 import chalk from 'chalk';
 import { spawn } from 'child_process';
-import { getConnectionByAlias } from '../database';
+import { expandHomePath, getConnectionByAlias } from '../database';
 import { selectAlias } from '../helpers/selectAlias';
+import { buildRemoteCommand } from '../helpers/shell';
 
 export async function testConnectionPrompt(alias?: string): Promise<void> {
 
@@ -15,14 +16,25 @@ export async function testConnectionPrompt(alias?: string): Promise<void> {
         return;
     }
 
-    const { user, host, key_path, port } = connection;
+    const { user, host, key_path, port, remote_path } = connection;
     console.log(`\nTesting connection to ${chalk.blue(alias)}...`);
 
     const testPromise = new Promise<{ code: number | null; stderr: string }>((resolve) => {
         const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'];
-        if (key_path) args.push('-i', key_path);
+        if (key_path) args.push('-i', expandHomePath(key_path) ?? key_path);
         if (port) args.push('-p', String(port));
-        args.push(`${user}@${host}`, 'exit');
+        args.push(`${user}@${host}`);
+        if (remote_path) {
+            const remoteCommand = buildRemoteCommand({
+                remotePath: remote_path,
+                postCommand: 'exit',
+            });
+            if (remoteCommand) {
+                args.push('-t', remoteCommand);
+            }
+        } else {
+            args.push('exit');
+        }
 
         const child = spawn('ssh', args, { stdio: ['ignore', 'ignore', 'pipe'] });
         let stderr = '';

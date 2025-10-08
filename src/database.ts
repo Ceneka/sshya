@@ -13,6 +13,7 @@ export interface Connection {
   host: string;
   key_path?: string;
   port?: string;
+  remote_path?: string;
   lastUsed?: number;
 }
 
@@ -22,14 +23,53 @@ export const connectionSchema = z.object({
   host: z.string().min(1),
   key_path: z.string().optional(),
   port: z.union([z.string(), z.number()]).optional(),
+  remote_path: z.string().optional(),
 });
+
+const normalizeOptionalString = (value?: string | number | null): string | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const trimmed = String(value).trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+export const expandHomePath = (input?: string): string | undefined => {
+  if (!input) {
+    return undefined;
+  }
+  if (input === '~') {
+    return os.homedir();
+  }
+  if (input.startsWith('~/')) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
+};
+
+const normalizeConnection = (connection: Connection): Connection => {
+  const normalizedKeyPath = expandHomePath(normalizeOptionalString(connection.key_path));
+  const normalizedPort = normalizeOptionalString(connection.port);
+  const normalizedRemotePath = normalizeOptionalString(connection.remote_path);
+
+  return {
+    ...connection,
+    alias: connection.alias.trim(),
+    user: connection.user.trim(),
+    host: connection.host.trim(),
+    key_path: normalizedKeyPath,
+    port: normalizedPort,
+    remote_path: normalizedRemotePath,
+  };
+};
 
 const readDB = (): Connection[] => {
   if (!fs.existsSync(dbFilePath)) {
     return [];
   }
   const data = fs.readFileSync(dbFilePath, 'utf-8');
-  return JSON.parse(data);
+  const parsed: Connection[] = JSON.parse(data);
+  return parsed.map(normalizeConnection);
 };
 
 const writeDB = (data: Connection[]) => {
@@ -49,21 +89,42 @@ export const initDB = () => {
   // Initialize empty database file if it does not exist
   if (!fs.existsSync(dbFilePath)) {
     writeDB([]);
+    return;
   }
+
+  // Normalize any existing data on disk once during init
+  const existingData = readDB();
+  writeDB(existingData);
 };
 
-export const addConnection = (alias: string, user: string, host: string, key_path?: string, port?: string) => {
+export const addConnection = (
+  alias: string,
+  user: string,
+  host: string,
+  key_path?: string,
+  port?: string,
+  remote_path?: string,
+) => {
   const connections = readDB();
-  if (connections.some(c => c.alias === alias)) {
-    throw new Error(`Connection with alias "${alias}" already exists.`);
+  const normalizedAlias = alias.trim();
+  if (connections.some(c => c.alias === normalizedAlias)) {
+    throw new Error(`Connection with alias "${normalizedAlias}" already exists.`);
   }
+
+  const normalizedUser = user.trim();
+  const normalizedHost = host.trim();
+  const normalizedKeyPath = expandHomePath(normalizeOptionalString(key_path));
+  const normalizedPort = normalizeOptionalString(port);
+  const normalizedRemotePath = normalizeOptionalString(remote_path);
+
   const newConnection: Connection = {
     id: connections.length > 0 ? Math.max(...connections.map(c => c.id)) + 1 : 1,
-    alias,
-    user,
-    host,
-    key_path,
-    port,
+    alias: normalizedAlias,
+    user: normalizedUser,
+    host: normalizedHost,
+    key_path: normalizedKeyPath,
+    port: normalizedPort,
+    remote_path: normalizedRemotePath,
   };
   connections.push(newConnection);
   writeDB(connections);
@@ -84,14 +145,22 @@ export const removeConnection = (alias: string) => {
   writeDB(newConnections);
 };
 
-export const updateConnection = (alias: string, newUser: string, newHost: string, newKeyPath: string, newPort?: string) => {
+export const updateConnection = (
+  alias: string,
+  newUser: string,
+  newHost: string,
+  newKeyPath?: string,
+  newPort?: string,
+  newRemotePath?: string,
+) => {
   const connections = readDB();
   const connection = connections.find(c => c.alias === alias);
   if (connection) {
-    connection.user = newUser;
-    connection.host = newHost;
-    connection.key_path = newKeyPath;
-    connection.port = newPort;
+    connection.user = newUser.trim();
+    connection.host = newHost.trim();
+    connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
+    connection.port = normalizeOptionalString(newPort);
+    connection.remote_path = normalizeOptionalString(newRemotePath);
     writeDB(connections);
   }
 };

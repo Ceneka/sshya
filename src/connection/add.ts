@@ -31,6 +31,11 @@ export async function addConnectionPrompt() {
             name: 'key_path',
             message: 'Path to key (optional):',
         },
+        {
+            type: 'input',
+            name: 'remote_path',
+            message: 'Remote working directory (optional):',
+        },
     ]);
 
     const parsed = connectionSchema.safeParse(answers);
@@ -38,10 +43,10 @@ export async function addConnectionPrompt() {
         console.error(chalk.red('Invalid input:'), parsed.error.errors.map(e => e.message).join(', '));
         return;
     }
-    const { alias, user, host, key_path, port } = parsed.data;
+    const { alias, user, host, key_path, port, remote_path } = parsed.data;
 
     try {
-        addConnection(alias, user, host, key_path, port ? String(port) : undefined);
+        addConnection(alias, user, host, key_path, port ? String(port) : undefined, remote_path);
         console.log(chalk.green('Connection added successfully'));
 
         const { test } = await inquirer.prompt([
