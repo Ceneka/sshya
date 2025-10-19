@@ -76,5 +76,4 @@ For bash, see the printed notes (example: `bind -x` with Ctrl-S), and ensure flo
 
 ### Troubleshooting
 
-- If typing doesn't work in the remote session, make sure you've reloaded your shell after updating the snippet (it uses `zle -I`, `zle -R -c`, and restores `stty`).
 - If the port or key path is ignored, ensure you're on the updated snippet which splits args correctly for zsh/bash and make sure `sshya print <alias>` outputs the expected `-p`/`-i` flags.

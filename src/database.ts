@@ -34,15 +34,24 @@ const normalizeOptionalString = (value?: string | number | null): string | undef
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// Cache home directory for performance
+let homeDirCache: string | null = null;
+
 export const expandHomePath = (input?: string): string | undefined => {
   if (!input) {
     return undefined;
   }
+
+  // Cache home directory
+  if (!homeDirCache) {
+    homeDirCache = os.homedir();
+  }
+
   if (input === '~') {
-    return os.homedir();
+    return homeDirCache;
   }
   if (input.startsWith('~/')) {
-    return path.join(os.homedir(), input.slice(2));
+    return path.join(homeDirCache, input.slice(2));
   }
   return input;
 };
@@ -63,13 +72,31 @@ const normalizeConnection = (connection: Connection): Connection => {
   };
 };
 
+// Cache for parsed connections to avoid re-reading/parsing
+let connectionCache: Connection[] | null = null;
+let cacheTimestamp: number = 0;
+const CACHE_DURATION = 1000; // 1 second cache
+
 const readDB = (): Connection[] => {
-  if (!fs.existsSync(dbFilePath)) {
-    return [];
+  const now = Date.now();
+
+  // Return cached data if it's still fresh
+  if (connectionCache && (now - cacheTimestamp) < CACHE_DURATION) {
+    return connectionCache;
   }
+
+  if (!fs.existsSync(dbFilePath)) {
+    connectionCache = [];
+    cacheTimestamp = now;
+    return connectionCache;
+  }
+
   const data = fs.readFileSync(dbFilePath, 'utf-8');
   const parsed: Connection[] = JSON.parse(data);
-  return parsed.map(normalizeConnection);
+  connectionCache = parsed.map(normalizeConnection);
+  cacheTimestamp = now;
+
+  return connectionCache;
 };
 
 const writeDB = (data: Connection[]) => {
@@ -78,6 +105,10 @@ const writeDB = (data: Connection[]) => {
     fs.mkdirSync(dbDir, { recursive: true });
   }
   fs.writeFileSync(dbFilePath, JSON.stringify(data, null, 2));
+
+  // Invalidate cache when data is written
+  connectionCache = null;
+  cacheTimestamp = 0;
 };
 
 export const initDB = () => {

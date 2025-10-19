@@ -1,42 +1,133 @@
 import chalk from "chalk";
+import os from "os";
 import { expandHomePath, getConnections } from "../database";
 import { buildRemoteCommand } from "../helpers/shell";
 
 export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
+    const startTime = performance.now();
     const connections = getConnections();
+    const dbReadTime = performance.now();
+    console.error(`[PERF] DB read took: ${(dbReadTime - startTime).toFixed(2)}ms`);
     if (options?.oneline) {
-        // Print each connection as ssh-ready args on a single line
+        // Optimized oneline processing for maximum speed
+        const loopStartTime = performance.now();
+
+        // Pre-compute constants outside the loop
+        const TAB = '\t';
+        const SPACE = ' ';
+        const DASH_I = '-i';
+        const DASH_P = '-p';
+        const DASH_T = '-t';
+        const SINGLE_QUOTE = "'";
+        const ESCAPED_QUOTE = "'\\''";
+
+        // Cache home directory for path expansion
+        const homeDir = os.homedir();
+
+        // Pre-compute user@host combinations to avoid string concatenation in loop
+        const userHostCache = new Map<string, string>();
         for (const c of connections) {
-            const parts: string[] = [];
-            if (c.key_path) {
-                const expandedKeyPath = expandHomePath(String(c.key_path));
-                // Safely single-quote the key path for shells
-                const quotedKey = `'${String(expandedKeyPath).replace(/'/g, "'\\''")}'`;
-                parts.push('-i', quotedKey);
-            }
-            if (c.port) {
-                parts.push('-p', String(c.port));
-            }
-            // Always add -t for interactive terminal allocation (required for fzf integration)
-            parts.push('-t');
-            parts.push(`${c.user}@${c.host}`);
-            if (c.remote_path) {
-                const remoteCommand = buildRemoteCommand({
-                    remotePath: String(c.remote_path),
-                    postCommand: 'exec "$SHELL" -l',
-                });
-                if (remoteCommand) {
-                    parts.push(remoteCommand);
-                }
-            }
-            const args = parts.join(' ');
+            userHostCache.set(c.alias, `${c.user}@${c.host}`);
+        }
+
+        for (const c of connections) {
+            // Use cached user@host
+            const userHost = userHostCache.get(c.alias)!;
+
             if (options?.names) {
-                // Tab-separated: alias<TAB>user@host<TAB>args for easy fzf display and parsing
-                console.log(`${c.alias}\t${c.user}@${c.host}\t${args}`);
+                // Optimized tab-separated format for fzf
+                let output = c.alias + TAB + userHost + TAB;
+
+                // Build SSH args array more efficiently
+                const args: string[] = [];
+
+                if (c.key_path) {
+                    // Fast path expansion - only expand if it starts with ~
+                    let expandedKeyPath = c.key_path;
+                    if (expandedKeyPath.startsWith('~')) {
+                        if (expandedKeyPath === '~') {
+                            expandedKeyPath = homeDir;
+                        } else if (expandedKeyPath.startsWith('~/')) {
+                            expandedKeyPath = homeDir + expandedKeyPath.slice(1);
+                        }
+                    }
+
+                    // Fast quote escaping - only escape single quotes
+                    const needsEscaping = expandedKeyPath.includes(SINGLE_QUOTE);
+                    const quotedKey = needsEscaping
+                        ? SINGLE_QUOTE + expandedKeyPath.replace(/'/g, ESCAPED_QUOTE) + SINGLE_QUOTE
+                        : SINGLE_QUOTE + expandedKeyPath + SINGLE_QUOTE;
+
+                    args.push(DASH_I, quotedKey);
+                }
+
+                if (c.port) {
+                    args.push(DASH_P, String(c.port));
+                }
+
+                // Always add -t for interactive terminal allocation
+                args.push(DASH_T);
+                args.push(userHost);
+
+                if (c.remote_path) {
+                    // Only build remote command if needed
+                    const remoteCommand = buildRemoteCommand({
+                        remotePath: String(c.remote_path),
+                        postCommand: 'exec "$SHELL" -l',
+                    });
+                    if (remoteCommand) {
+                        args.push(remoteCommand);
+                    }
+                }
+
+                // Join args with spaces (faster than array join for small arrays)
+                output += args.join(SPACE);
+                console.log(output);
             } else {
-                console.log(args);
+                // Simple args-only format (even faster)
+                const args: string[] = [];
+
+                if (c.key_path) {
+                    let expandedKeyPath = c.key_path;
+                    if (expandedKeyPath.startsWith('~')) {
+                        if (expandedKeyPath === '~') {
+                            expandedKeyPath = homeDir;
+                        } else if (expandedKeyPath.startsWith('~/')) {
+                            expandedKeyPath = homeDir + expandedKeyPath.slice(1);
+                        }
+                    }
+
+                    const needsEscaping = expandedKeyPath.includes(SINGLE_QUOTE);
+                    const quotedKey = needsEscaping
+                        ? SINGLE_QUOTE + expandedKeyPath.replace(/'/g, ESCAPED_QUOTE) + SINGLE_QUOTE
+                        : SINGLE_QUOTE + expandedKeyPath + SINGLE_QUOTE;
+
+                    args.push(DASH_I, quotedKey);
+                }
+
+                if (c.port) {
+                    args.push(DASH_P, String(c.port));
+                }
+
+                args.push(DASH_T);
+                args.push(userHost);
+
+                if (c.remote_path) {
+                    const remoteCommand = buildRemoteCommand({
+                        remotePath: String(c.remote_path),
+                        postCommand: 'exec "$SHELL" -l',
+                    });
+                    if (remoteCommand) {
+                        args.push(remoteCommand);
+                    }
+                }
+
+                console.log(args.join(SPACE));
             }
         }
+
+        const loopEndTime = performance.now();
+        console.error(`[PERF] Oneline processing took: ${(loopEndTime - loopStartTime).toFixed(2)}ms for ${connections.length} connections`);
         process.exit(0);
     }
 
