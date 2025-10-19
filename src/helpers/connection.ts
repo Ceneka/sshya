@@ -21,6 +21,8 @@ export async function printConnectionsPrompt(alias?: string) {
   if (connection.port) {
     parts.push('-p', String(connection.port));
   }
+  // Always add -t for interactive terminal allocation (required for fzf integration)
+  parts.push('-t');
   parts.push(`${connection.user}@${connection.host}`);
   if (connection.remote_path) {
     const remoteCommand = buildRemoteCommand({
@@ -28,7 +30,7 @@ export async function printConnectionsPrompt(alias?: string) {
       postCommand: 'exec "$SHELL" -l',
     });
     if (remoteCommand) {
-      parts.push('-t', remoteCommand);
+      parts.push(remoteCommand);
     }
   }
   console.log(parts.join(' '));
