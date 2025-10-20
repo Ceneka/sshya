@@ -51,7 +51,7 @@
 ## Build & Installation
 ```bash
 bun run build  # Creates bin/sshya binary
-sudo mv bin/sshya /usr/local/bin/s  # Global access
+bun install -g # Global access
 ```
 
 This tool prioritizes developer experience with fast, keyboard-driven workflows while maintaining robust error handling and cross-platform compatibility.

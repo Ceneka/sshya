@@ -54,25 +54,16 @@ This ensures flags like `-p 2222` and identities like `-i '/path/with spaces/key
 
 When launching from `fzf`, we intentionally use your host `ssh` binary instead of the built-in connect helper to avoid TTY and ZLE interaction problems.
 
-### ZLE/TTY handling (zsh)
 
-The snippet detaches the zsh line editor before starting `ssh` and restores it after:
+### Usage
 
-- Before `ssh`: `zle -I`
-- After `ssh`: `zle -R -c`
-
-It also temporarily disables XON/XOFF flow control during selection (enables Ctrl-S) and restores your previous `stty` settings afterward.
-
-### Keybinding
-
-The snippet includes an example zsh binding:
+After adding the snippet to your shell rc and reloading, simply run:
 
 ```bash
-zle -N fzf_sshya
-bindkey '^S' fzf_sshya
+s
 ```
 
-For bash, see the printed notes (example: `bind -x` with Ctrl-S), and ensure flow control is disabled (`stty -ixon`).
+This will launch the fzf interface for selecting and connecting to your saved SSH connections.
 
 ### Troubleshooting
 

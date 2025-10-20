@@ -4,19 +4,12 @@ export function printFzfInstructions() {
     console.log(chalk.yellow('To enable a quick fzf-powered SSH launcher, add this to your shell rc:'));
     console.log('\n' + chalk.bold('~/.bashrc or ~/.zshrc') + '\n');
     const snippet = [
-        '_fzf_sshya() {',
-        '  local line alias userhost command oldstty',
-        '  # Disable XON/XOFF for Ctrl-S binding',
-        '  oldstty=$(stty -g 2>/dev/null)',
-        '  stty -ixon 2>/dev/null || true',
+        's() {',
+        '  local line alias userhost command',
         '  run_sshya() {',
-        '    if command -v sshya >/dev/null 2>&1; then',
-        '      stdbuf -oL sshya "$@"',
-        '    else',
-        '      stdbuf -oL bun --silent run start "$@"',
-        '    fi',
+        '    stdbuf -oL sshya "$@"',
         '  }',
-        "  line=$(run_sshya list --oneline --names | fzf --tac --with-nth=1,2 --delimiter=$'\\t') || { stty \"$oldstty\" 2>/dev/null || true; return; }",
+        "  line=$(run_sshya list --oneline --names | fzf --tac --with-nth=1,2 --delimiter=$'\\t') || return",
         "  alias=${line%%$'\\t'*}",
         "  userhost=${line#*$'\\t'}; userhost=${userhost%%$'\\t'*}",
         "  command=$(run_sshya print \"$alias\")",
@@ -24,22 +17,17 @@ export function printFzfInstructions() {
         "  if [ -n \"$ZSH_VERSION\" ]; then",
         "    local -a _args; _args=(${(zQ)command})",
         "    ssh \"${_args[@]}\"",
-        "    zle -R -c",
         "  else",
         "    read -r -a __args <<< \"$command\"",
         "    ssh \"${__args[@]}\"",
         "  fi",
-        "  stty \"$oldstty\" 2>/dev/null || true",
         '}',
-        '# Zsh widget binding',
-        'zle -N _fzf_sshya',
-        "bindkey '^S' _fzf_sshya",
     ].join('\n');
     console.log(chalk.cyan(snippet));
     console.log('\n' + chalk.green('Notes:'));
     console.log('- This expects ' + chalk.bold('fzf') + ' to be installed.');
-    console.log('- On bash, you can bind with: ' + chalk.cyan("bind -x '" + '\\"\\u0013\\":_fzf_sshya' + "'"));
-    console.log('- If Ctrl-S is flow control, disable with: ' + chalk.cyan('stty -ixon'));
+    console.log('- After adding this to your shell rc, reload with: ' + chalk.cyan('source ~/.zshrc') + ' or ' + chalk.cyan('source ~/.bashrc'));
+    console.log('- Then simply run ' + chalk.bold('s') + ' to launch the fzf interface');
     process.exit(0);
 }
 
