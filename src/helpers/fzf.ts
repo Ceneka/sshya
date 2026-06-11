@@ -5,22 +5,15 @@ export function printFzfInstructions() {
     console.log('\n' + chalk.bold('~/.bashrc or ~/.zshrc') + '\n');
     const snippet = [
         's() {',
-        '  local line alias userhost command',
+        '  local line alias userhost',
         '  run_sshya() {',
         '    stdbuf -oL sshya "$@"',
         '  }',
-        "  line=$(run_sshya list --oneline --names | fzf --with-nth=1,2 --delimiter=$'\\t') || return",
+        "  line=$(run_sshya list --oneline --names | fzf --with-nth=1,2 --nth=1,2 --delimiter=$'\\t') || return",
         "  alias=${line%%$'\\t'*}",
         "  userhost=${line#*$'\\t'}; userhost=${userhost%%$'\\t'*}",
-        "  command=$(run_sshya print \"$alias\")",
         "  echo \"Connecting: $alias ($userhost)\"",
-        "  if [ -n \"$ZSH_VERSION\" ]; then",
-        "    local -a _args; _args=(${(zQ)command})",
-        "    ssh \"${_args[@]}\"",
-        "  else",
-        "    read -r -a __args <<< \"$command\"",
-        "    ssh \"${__args[@]}\"",
-        "  fi",
+        "  run_sshya connect \"$alias\"",
         '}',
     ].join('\n');
     console.log(chalk.cyan(snippet));

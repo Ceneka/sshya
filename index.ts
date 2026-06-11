@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
 import pkg from './package.json' assert { type: "json" };
-import { addConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
+import { addConnectionPrompt, connectConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
@@ -24,7 +24,12 @@ program
   .version(version)
   .description('A simple CLI to manage your SSH connections');
 
-// connect command removed – use system ssh via fzf snippet
+program
+  .command('connect [alias]')
+  .aliases(['ssh', 'go'])
+  .description('Connect to an SSH connection by alias')
+  .action(connectConnectionPrompt);
+
 
 program
   .command('print [alias]')
