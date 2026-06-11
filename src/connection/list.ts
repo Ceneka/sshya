@@ -4,13 +4,12 @@ import { expandHomePath, getConnections } from "../database";
 import { buildRemoteCommand } from "../helpers/shell";
 
 export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
-    const startTime = performance.now();
-    const connections = getConnections();
-    const dbReadTime = performance.now();
-    console.error(`[PERF] DB read took: ${(dbReadTime - startTime).toFixed(2)}ms`);
+    let connections = getConnections();
     if (options?.oneline) {
-        // Optimized oneline processing for maximum speed
-        const loopStartTime = performance.now();
+        // Sort by lastUsed (most recent first) for fzf - this helps with selection
+        if (options?.names) {
+            connections = connections.sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
+        }
 
         // Pre-compute constants outside the loop
         const TAB = '\t';
@@ -126,8 +125,6 @@ export async function listConnectionsPrompt(options?: { oneline?: boolean; names
             }
         }
 
-        const loopEndTime = performance.now();
-        console.error(`[PERF] Oneline processing took: ${(loopEndTime - loopStartTime).toFixed(2)}ms for ${connections.length} connections`);
         process.exit(0);
     }
 

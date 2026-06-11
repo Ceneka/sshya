@@ -9,7 +9,7 @@ export function printFzfInstructions() {
         '  run_sshya() {',
         '    stdbuf -oL sshya "$@"',
         '  }',
-        "  line=$(run_sshya list --oneline --names | fzf --tac --with-nth=1,2 --delimiter=$'\\t') || return",
+        "  line=$(run_sshya list --oneline --names | fzf --with-nth=1,2 --delimiter=$'\\t') || return",
         "  alias=${line%%$'\\t'*}",
         "  userhost=${line#*$'\\t'}; userhost=${userhost%%$'\\t'*}",
         "  command=$(run_sshya print \"$alias\")",

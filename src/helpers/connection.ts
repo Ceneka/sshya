@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { expandHomePath, getConnectionByAlias } from "../database";
+import { expandHomePath, getConnectionByAlias, recordConnectionUsage } from "../database";
 import { buildRemoteCommand } from "./shell";
 
 export async function printConnectionsPrompt(alias?: string) {
@@ -12,6 +12,8 @@ export async function printConnectionsPrompt(alias?: string) {
     console.error(chalk.red('Alias not found'));
     process.exit(1);
   }
+  // Record usage when connection is accessed via print (used by fzf)
+  recordConnectionUsage(alias);
   const parts: string[] = [];
   if (connection.key_path) {
     const expandedKeyPath = expandHomePath(String(connection.key_path));
