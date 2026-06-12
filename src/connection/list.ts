@@ -6,9 +6,10 @@ import { buildRemoteCommand } from "../helpers/shell";
 export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
     let connections = getConnections();
     if (options?.oneline) {
-        // Sort by lastUsed ascending so most recently used appears at the bottom for fzf
+        // Sort by lastUsed descending so most recently used is first in the pipe;
+        // fzf's default layout places the first line at the bottom near the cursor.
         if (options?.names) {
-            connections = connections.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0));
+            connections = connections.sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
         }
 
         // Pre-compute constants outside the loop
