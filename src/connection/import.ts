@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import fs from 'fs';
 import inquirer from 'inquirer';
 import { addConnection, connectionSchema, getConnectionByAlias, updateConnection } from '../database';
+import { enableEscapeExit } from '../helpers/escExit';
 
 export const importConnectionsPrompt = async (file: string) => {
     if (!fs.existsSync(file)) {
@@ -24,6 +25,8 @@ export const importConnectionsPrompt = async (file: string) => {
 
         console.log(`Found ${connectionsToImport.length} connections to import.`);
 
+        const cleanup = enableEscapeExit();
+        try {
         for (const conn of connectionsToImport) {
             const validation = connectionSchema.safeParse(conn);
             if (!validation.success) {
@@ -77,6 +80,9 @@ export const importConnectionsPrompt = async (file: string) => {
         console.log(`- ${importedCount} new connections added.`);
         console.log(`- ${updatedCount} connections overwritten.`);
         console.log(`- ${skippedCount} connections skipped.`);
+        } finally {
+            cleanup();
+        }
     } catch (err: any) {
         console.error(chalk.red(`Error reading or parsing file: ${err instanceof Error ? err.message : String(err)}`));
     }

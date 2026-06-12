@@ -1,9 +1,12 @@
 import chalk from "chalk";
 import inquirer from "inquirer";
 import { addConnection, connectionSchema } from "../database";
+import { enableEscapeExit } from "../helpers/escExit";
 import { testConnectionPrompt } from "./test";
 
 export async function addConnectionPrompt() {
+    const cleanup = enableEscapeExit();
+    try {
     const answers = await inquirer.prompt([
         {
             type: 'input',
@@ -63,5 +66,8 @@ export async function addConnectionPrompt() {
         }
     } catch (err: any) {
         console.error(chalk.red(err.message));
+    }
+    } finally {
+        cleanup();
     }
 }

@@ -2,7 +2,8 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.2.2",
+  "version": "0.2.3",
+  "description": "CLI for managing SSH connections with aliases, interactive prompts, and fzf integration",
   "devDependencies": {
     "@types/bun": "latest",
     "@types/chalk": "^2.2.4"
@@ -26,6 +27,7 @@
     "bun": ">=1.2.0"
   },
   "bin": {
-    "sshya": "index.ts"
+    "sshya": "index.ts",
+    "s": "index.ts"
   }
 }

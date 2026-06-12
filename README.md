@@ -3,10 +3,11 @@
 This project is a command-line interface (CLI) tool named `sshya` for managing SSH connections.
 
 ## Core Functionality
-- Add, remove, update, and list SSH connection configurations (alias, user, host, port, key path).
-- Generate SSH command strings for saved connections.
+- Add, remove, update, and list SSH connection configurations (alias, user, host, port, key path, remote path).
+- Connect to saved connections with `sshya connect` (aliases: `ssh`, `go`).
+- Generate SSH command strings for scripting with `sshya print`.
 - Import and export connections from/to a JSON file.
-- A key feature is the fzf-based launcher that provides fast, keyboard-driven connection selection and execution using your system's SSH client.
+- fzf-based launcher for fast, keyboard-driven connection selection.
 
 ## Technology Stack
 - **Runtime:** Bun
@@ -19,7 +20,7 @@ This project is a command-line interface (CLI) tool named `sshya` for managing S
     - `zod`: for validating user input and imported data.
 
 ## Implementation Details
-The main application logic is in `index.ts`. The tool generates SSH command strings that are executed by your system's SSH client, providing a clean separation between connection management and actual SSH execution.
+The main application logic is in `index.ts`. SSH arguments are built in-process and passed directly to your system `ssh` binary, avoiding fragile shell string parsing.
 
 ## fzf-based launcher
 
@@ -41,19 +42,9 @@ You can enable a fast, keyboard-driven launcher for your saved connections using
 
 ### How it works
 
-- The function displays your connections via `sshya list --oneline --names`, showing:
-  - alias, user@host (for display), and a third tab-separated column containing ssh-ready arguments.
-- After you pick an entry with `fzf`, it runs `sshya print <alias>` to obtain a single-line command string and then invokes your system `ssh` client.
-- Argument splitting is handled per-shell to avoid issues with flags and quoting:
-  - zsh: `ssh ${(z)command}`
-  - bash: `read -r -a __args <<< "$command"; ssh "${__args[@]}"`
-
-This ensures flags like `-p 2222` and identities like `-i '/path/with spaces/key'` are passed correctly to `ssh`.
-
-### Why system ssh?
-
-When launching from `fzf`, we intentionally use your host `ssh` binary instead of the built-in connect helper to avoid TTY and ZLE interaction problems.
-
+- The function displays your connections via `sshya list --oneline --names`, showing alias and user@host.
+- After you pick an entry with `fzf`, it runs `sshya connect <alias>`.
+- `sshya connect` builds SSH arguments in-process and spawns your system `ssh` with inherited stdio, so TTY behavior matches typing the command yourself.
 
 ### Usage
 
@@ -65,6 +56,14 @@ s
 
 This will launch the fzf interface for selecting and connecting to your saved SSH connections.
 
+You can also connect directly without fzf:
+
+```bash
+sshya connect my-server
+sshya connect          # interactive picker
+```
+
 ### Troubleshooting
 
-- If the port or key path is ignored, ensure you're on the updated snippet which splits args correctly for zsh/bash and make sure `sshya print <alias>` outputs the expected `-p`/`-i` flags.
+- If fzf filtering looks wrong, reload your shell after updating the snippet. The launcher should call `sshya connect`, not parse `sshya print` output.
+- If the port or key path is ignored, verify the connection with `sshya test <alias>`.

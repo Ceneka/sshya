@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import inquirer from "inquirer";
 import { getConnectionByAlias, updateConnection } from "../database";
+import { enableEscapeExit } from "../helpers/escExit";
 import { selectAlias } from "../helpers/selectAlias";
 import { testConnectionPrompt } from "./test";
 
@@ -12,6 +13,8 @@ export async function updateConnectionPrompt(alias?: string) {
 
     const connection = getConnectionByAlias(alias);
     if (connection) {
+        const cleanup = enableEscapeExit();
+        try {
         const answers = await inquirer.prompt([
             {
                 type: 'input',
@@ -58,6 +61,9 @@ export async function updateConnectionPrompt(alias?: string) {
 
         if (test) {
             await testConnectionPrompt(alias);
+        }
+        } finally {
+            cleanup();
         }
     } else {
         console.error(chalk.red('Alias not found'));

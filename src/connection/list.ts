@@ -1,14 +1,14 @@
 import chalk from "chalk";
 import os from "os";
-import { expandHomePath, getConnections } from "../database";
+import { getConnections } from "../database";
 import { buildRemoteCommand } from "../helpers/shell";
 
 export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
     let connections = getConnections();
     if (options?.oneline) {
-        // Sort by lastUsed (most recent first) for fzf - this helps with selection
+        // Sort by lastUsed ascending so most recently used appears at the bottom for fzf
         if (options?.names) {
-            connections = connections.sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
+            connections = connections.sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0));
         }
 
         // Pre-compute constants outside the loop
@@ -34,54 +34,7 @@ export async function listConnectionsPrompt(options?: { oneline?: boolean; names
             const userHost = userHostCache.get(c.alias)!;
 
             if (options?.names) {
-                // Optimized tab-separated format for fzf
-                let output = c.alias + TAB + userHost + TAB;
-
-                // Build SSH args array more efficiently
-                const args: string[] = [];
-
-                if (c.key_path) {
-                    // Fast path expansion - only expand if it starts with ~
-                    let expandedKeyPath = c.key_path;
-                    if (expandedKeyPath.startsWith('~')) {
-                        if (expandedKeyPath === '~') {
-                            expandedKeyPath = homeDir;
-                        } else if (expandedKeyPath.startsWith('~/')) {
-                            expandedKeyPath = homeDir + expandedKeyPath.slice(1);
-                        }
-                    }
-
-                    // Fast quote escaping - only escape single quotes
-                    const needsEscaping = expandedKeyPath.includes(SINGLE_QUOTE);
-                    const quotedKey = needsEscaping
-                        ? SINGLE_QUOTE + expandedKeyPath.replace(/'/g, ESCAPED_QUOTE) + SINGLE_QUOTE
-                        : SINGLE_QUOTE + expandedKeyPath + SINGLE_QUOTE;
-
-                    args.push(DASH_I, quotedKey);
-                }
-
-                if (c.port) {
-                    args.push(DASH_P, String(c.port));
-                }
-
-                // Always add -t for interactive terminal allocation
-                args.push(DASH_T);
-                args.push(userHost);
-
-                if (c.remote_path) {
-                    // Only build remote command if needed
-                    const remoteCommand = buildRemoteCommand({
-                        remotePath: String(c.remote_path),
-                        postCommand: 'exec "$SHELL" -l',
-                    });
-                    if (remoteCommand) {
-                        args.push(remoteCommand);
-                    }
-                }
-
-                // Join args with spaces (faster than array join for small arrays)
-                output += args.join(SPACE);
-                console.log(output);
+                console.log(c.alias + TAB + userHost);
             } else {
                 // Simple args-only format (even faster)
                 const args: string[] = [];
