@@ -4,6 +4,30 @@ import inquirer from "inquirer";
 import { getConnections } from "../database";
 import { enableEscapeExit } from "./escExit";
 
+const getAliasChoices = () => {
+    return getConnections()
+        .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0))
+        .map(c => ({ name: c.alias, value: c.alias }));
+};
+
+const searchAliasChoices = (term: string) => {
+    const choices = getAliasChoices();
+    if (term.trim().length === 0) {
+        return choices;
+    }
+
+    const fuse = new Fuse(choices, {
+        keys: ['name'],
+        threshold: 0.4,
+    });
+
+    return fuse.search(term).map(r => r.item);
+};
+
+export const findAliasBySearchTerm = (term: string): string | undefined => {
+    return searchAliasChoices(term)[0]?.value;
+};
+
 /**
  * Prompt user to choose a connection alias using fuzzy search.
  * Aborts the process if user presses ESC or if no connections are available.
@@ -11,8 +35,7 @@ import { enableEscapeExit } from "./escExit";
  * @returns selected alias as string
  */
 export async function selectAlias(message: string = "Select a connection"): Promise<string> {
-    const connections = getConnections().sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
-    if (connections.length === 0) {
+    if (getConnections().length === 0) {
         console.log(chalk.yellow('No connections found. Add one with "sshya add"'));
         process.exit(0);
     }
@@ -29,20 +52,12 @@ export async function selectAlias(message: string = "Select a connection"): Prom
                 // The signature matches the @inquirer/search documentation:
                 //   (term: string | void, { signal }: { signal: AbortSignal }) => Promise<Choice[]>
                 source: async (term: unknown) => {
-                    const allChoices = connections.map(c => ({ name: c.alias, value: c.alias }));
-
                     // When term is undefined or empty, return the full, recently-used-sorted list.
                     if (typeof term !== 'string' || term.trim().length === 0) {
-                        return allChoices;
+                        return searchAliasChoices('');
                     }
 
-                    // Use Fuse.js for fuzzy matching on the `name` field of choice objects.
-                    const fuse = new Fuse(allChoices, {
-                        keys: ['name'],
-                        threshold: 0.4,
-                    });
-
-                    return fuse.search(term).map(r => r.item);
+                    return searchAliasChoices(term);
                 },
             },
         ]);

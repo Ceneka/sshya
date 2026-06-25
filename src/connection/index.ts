@@ -1,5 +1,6 @@
 export * from './add';
 export * from './connect';
+export * from './copy';
 export * from './export';
 export * from './import';
 export * from './list';

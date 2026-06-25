@@ -2,14 +2,22 @@ import chalk from 'chalk';
 import { spawn } from 'child_process';
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage } from '../database';
 import { buildRemoteCommand } from '../helpers/shell';
-import { selectAlias } from '../helpers/selectAlias';
+import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
 
 export async function connectConnectionPrompt(alias?: string): Promise<void> {
     if (!alias) {
         alias = await selectAlias('Select a connection to connect');
     }
 
-    const connection = getConnectionByAlias(alias);
+    let connection = getConnectionByAlias(alias);
+    if (!connection) {
+        const matchedAlias = findAliasBySearchTerm(alias);
+        if (matchedAlias) {
+            alias = matchedAlias;
+            connection = getConnectionByAlias(alias);
+        }
+    }
+
     if (!connection) {
         console.error(chalk.red('Alias not found'));
         process.exit(1);

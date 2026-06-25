@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
 import pkg from './package.json' assert { type: "json" };
-import { addConnectionPrompt, connectConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
+import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
@@ -30,6 +30,20 @@ program
   .description('Connect to an SSH connection by alias')
   .action(connectConnectionPrompt);
 
+program
+  .command('copy [alias] [source] [destination]')
+  .aliases(['sc', 'scp'])
+  .description('Copy files using a stored SSH connection')
+  .option('-d, --download', 'Copy from the remote host to a local destination')
+  .option('-r, --recursive', 'Copy directories recursively')
+  .option('-p, --preserve', 'Preserve modification times, access times, and modes')
+  .action((alias?: string, source?: string, destination?: string, options?: { download?: boolean; recursive?: boolean; preserve?: boolean }) => {
+    return copyConnectionPrompt(alias, source, destination, {
+      download: !!options?.download,
+      recursive: !!options?.recursive,
+      preserve: !!options?.preserve,
+    });
+  });
 
 program
   .command('print [alias]')

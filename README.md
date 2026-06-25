@@ -5,6 +5,7 @@ This project is a command-line interface (CLI) tool named `sshya` for managing S
 ## Core Functionality
 - Add, remove, update, and list SSH connection configurations (alias, user, host, port, key path, remote path).
 - Connect to saved connections with `sshya connect` (aliases: `ssh`, `go`).
+- Copy files through saved connections with `sshya copy` (aliases: `sc`, `scp`).
 - Generate SSH command strings for scripting with `sshya print`.
 - Import and export connections from/to a JSON file.
 - fzf-based launcher for fast, keyboard-driven connection selection.
@@ -62,6 +63,28 @@ You can also connect directly without fzf:
 sshya connect my-server
 sshya connect          # interactive picker
 ```
+
+### Copy files
+
+Use stored connections for `scp` uploads and downloads:
+
+```bash
+sshya copy my-server ./local.txt /tmp/remote.txt
+sshya copy ./local.txt /tmp/remote.txt              # interactive connection picker
+sshya copy --download my-server /tmp/remote.txt ./
+sshya copy --recursive my-server ./dist /var/www
+```
+
+The `copy` command also works as `sshya sc` or `sshya scp`. For a short no-fzf wrapper:
+
+```bash
+sc() {
+  sshya copy "$@"
+}
+```
+
+Relative remote paths are resolved from the connection's saved remote working directory when one is configured.
+If an exact alias is not found, `connect` and `copy` use the first fuzzy match from the same search used by the interactive picker.
 
 ### Troubleshooting
 
