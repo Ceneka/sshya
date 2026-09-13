@@ -7,7 +7,7 @@ import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exp
 import { initDB } from './src/database';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
-import { printFzfInstructions } from './src/helpers/fzf';
+import { runFzfLauncher } from './src/helpers/fzf';
 // built-in SSH handler removed
 
 const version = pkg?.version ?? '1.0.0';
@@ -93,11 +93,8 @@ program
 
 program
   .command('fzf')
-  .aliases(['instructions', 'install'])
-  .description('Show instructions to enable fzf-based connection launcher')
-  .action(() => {
-    printFzfInstructions();
-  });
+  .description('Select a connection with fzf and connect')
+  .action(runFzfLauncher);
 
 program
   .command('path')

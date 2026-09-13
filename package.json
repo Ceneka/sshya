@@ -2,7 +2,7 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "CLI for managing SSH connections with aliases, interactive prompts, and fzf integration",
   "devDependencies": {
     "@types/bun": "latest",
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --compile --outfile bin/sshya"
+    "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s"
   },
   "dependencies": {
     "@inquirer/search": "^3.0.17",
@@ -28,6 +28,6 @@
   },
   "bin": {
     "sshya": "index.ts",
-    "s": "index.ts"
+    "s": "s.ts"
   }
 }
