@@ -183,17 +183,29 @@ export const updateConnection = (
   newKeyPath?: string,
   newPort?: string,
   newRemotePath?: string,
+  newAlias?: string,
 ) => {
   const connections = readDB();
   const connection = connections.find(c => c.alias === alias);
-  if (connection) {
-    connection.user = newUser.trim();
-    connection.host = newHost.trim();
-    connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
-    connection.port = normalizeOptionalString(newPort);
-    connection.remote_path = normalizeOptionalString(newRemotePath);
-    writeDB(connections);
+  if (!connection) {
+    return;
   }
+
+  const normalizedAlias = (newAlias ?? alias).trim();
+  if (!normalizedAlias) {
+    throw new Error('Alias cannot be empty.');
+  }
+  if (normalizedAlias !== alias && connections.some(c => c.alias === normalizedAlias)) {
+    throw new Error(`Connection with alias "${normalizedAlias}" already exists.`);
+  }
+
+  connection.alias = normalizedAlias;
+  connection.user = newUser.trim();
+  connection.host = newHost.trim();
+  connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
+  connection.port = normalizeOptionalString(newPort);
+  connection.remote_path = normalizeOptionalString(newRemotePath);
+  writeDB(connections);
 };
 
 export const recordConnectionUsage = (alias: string) => {

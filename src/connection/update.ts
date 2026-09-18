@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import inquirer from "inquirer";
-import { getConnectionByAlias, updateConnection } from "../database";
+import { connectionSchema, getConnectionByAlias, updateConnection } from "../database";
 import { enableEscapeExit } from "../helpers/escExit";
 import { selectAlias } from "../helpers/selectAlias";
 import { testConnectionPrompt } from "./test";
@@ -16,6 +16,22 @@ export async function updateConnectionPrompt(alias?: string) {
         const cleanup = enableEscapeExit();
         try {
         const answers = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'alias',
+                message: 'Alias:',
+                default: connection.alias,
+                validate: (input: string) => {
+                    const trimmed = input.trim();
+                    if (!trimmed) {
+                        return 'Alias cannot be empty';
+                    }
+                    if (trimmed !== connection.alias && getConnectionByAlias(trimmed)) {
+                        return `Connection with alias "${trimmed}" already exists.`;
+                    }
+                    return true;
+                },
+            },
             {
                 type: 'input',
                 name: 'user',
@@ -47,20 +63,46 @@ export async function updateConnectionPrompt(alias?: string) {
                 default: connection.remote_path,
             },
         ]);
-        updateConnection(alias, answers.user, answers.host, answers.key_path, answers.port, answers.remote_path);
-        console.log(chalk.green('Connection updated successfully'));
 
-        const { test } = await inquirer.prompt([
-            {
-                type: 'confirm',
-                name: 'test',
-                message: 'Do you want to test the updated connection now?',
-                default: true,
-            },
-        ]);
+        const parsed = connectionSchema.safeParse(answers);
+        if (!parsed.success) {
+            console.error(chalk.red('Invalid input:'), parsed.error.errors.map(e => e.message).join(', '));
+            return;
+        }
 
-        if (test) {
-            await testConnectionPrompt(alias);
+        const { alias: newAlias, user, host, key_path, port, remote_path } = parsed.data;
+
+        try {
+            updateConnection(
+                alias,
+                user,
+                host,
+                key_path,
+                port ? String(port) : undefined,
+                remote_path,
+                newAlias,
+            );
+            const renamed = newAlias.trim() !== alias;
+            console.log(chalk.green(
+                renamed
+                    ? `Connection updated successfully (renamed to "${newAlias.trim()}")`
+                    : 'Connection updated successfully',
+            ));
+
+            const { test } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'test',
+                    message: 'Do you want to test the updated connection now?',
+                    default: true,
+                },
+            ]);
+
+            if (test) {
+                await testConnectionPrompt(newAlias.trim());
+            }
+        } catch (err: any) {
+            console.error(chalk.red(err.message));
         }
         } finally {
             cleanup();
