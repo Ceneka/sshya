@@ -2,27 +2,56 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "CLI for managing SSH connections with aliases, interactive prompts, and fzf integration",
+  "license": "MIT",
+  "author": "ceneka",
+  "keywords": [
+    "ssh",
+    "cli",
+    "ssh-config",
+    "ssh-aliases",
+    "connection-manager",
+    "fzf",
+    "fuzzy-search",
+    "bun",
+    "terminal",
+    "devops"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ceneka/sshya.git"
+  },
+  "homepage": "https://github.com/Ceneka/sshya#readme",
+  "bugs": {
+    "url": "https://github.com/Ceneka/sshya/issues"
+  },
   "devDependencies": {
-    "@types/bun": "latest",
-    "@types/chalk": "^2.2.4"
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "typescript": "^5.0.0"
+    "typescript": ">=5.0.0"
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s"
+    "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run typecheck"
   },
   "dependencies": {
-    "@inquirer/search": "^3.0.17",
-    "chalk": "^5.4.1",
-    "commander": "^14.0.0",
-    "fuse.js": "^7.0.0",
-    "inquirer": "^12.0.0",
-    "zod": "^3.22.2"
+    "chalk": "^6.0.0",
+    "commander": "^15.0.0",
+    "fuse.js": "^7.5.0",
+    "inquirer": "^14.2.2",
+    "zod": "^4.6.5"
   },
+  "files": [
+    "index.ts",
+    "s.ts",
+    "src",
+    "README.md"
+  ],
   "engines": {
     "bun": ">=1.2.0"
   },

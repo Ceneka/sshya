@@ -23,6 +23,20 @@ This project is a command-line interface (CLI) tool named `sshya` for managing S
 ## Implementation Details
 The main application logic is in `index.ts`. SSH arguments are built in-process and passed directly to your system `ssh` binary, avoiding fragile shell string parsing.
 
+## Installation
+
+Requires [Bun](https://bun.sh) >= 1.2.0, since the published entrypoints are TypeScript executed by Bun.
+
+```bash
+bun add -g sshya     # installs the `sshya` and `s` commands
+```
+
+Or with npm:
+
+```bash
+npm install -g sshya
+```
+
 ## Connecting
 
 Install exposes two commands: `sshya` for management, and `s` as a shortcut to connect. No shell rc changes are required.

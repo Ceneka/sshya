@@ -2,7 +2,7 @@
 
 import chalk from 'chalk';
 import { Command } from 'commander';
-import pkg from './package.json' assert { type: "json" };
+import pkg from './package.json' with { type: "json" };
 import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { printConnectionsPrompt } from './src/helpers/connection';

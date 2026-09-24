@@ -43,7 +43,7 @@ export async function addConnectionPrompt() {
 
     const parsed = connectionSchema.safeParse(answers);
     if (!parsed.success) {
-        console.error(chalk.red('Invalid input:'), parsed.error.errors.map(e => e.message).join(', '));
+        console.error(chalk.red('Invalid input:'), parsed.error.issues.map(e => e.message).join(', '));
         return;
     }
     const { alias, user, host, key_path, port, remote_path } = parsed.data;

@@ -66,7 +66,7 @@ export async function updateConnectionPrompt(alias?: string) {
 
         const parsed = connectionSchema.safeParse(answers);
         if (!parsed.success) {
-            console.error(chalk.red('Invalid input:'), parsed.error.errors.map(e => e.message).join(', '));
+            console.error(chalk.red('Invalid input:'), parsed.error.issues.map(e => e.message).join(', '));
             return;
         }
 

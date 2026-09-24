@@ -40,7 +40,7 @@ export const importConnectionsPrompt = async (file: string) => {
             if (existingConn) {
                 const { action } = await inquirer.prompt([
                     {
-                        type: 'list',
+                        type: 'select',
                         name: 'action',
                         message: `Connection with alias "${parsedConn.alias}" already exists. What do you want to do?`,
                         choices: ['Skip', 'Overwrite'],
