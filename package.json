@@ -2,7 +2,7 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI for managing SSH connections with aliases, interactive prompts, and fzf integration",
   "devDependencies": {
     "@types/bun": "latest",
