@@ -35,6 +35,12 @@ export const findAliasBySearchTerm = (term: string): string | undefined => {
  * @returns selected alias as string
  */
 export async function selectAlias(message: string = "Select a connection"): Promise<string> {
+    if (!process.stdin.isTTY) {
+        console.error(chalk.red('No alias provided and stdin is not a TTY.'));
+        console.error(chalk.grey('Pass an alias, or run this command in an interactive terminal.'));
+        process.exit(1);
+    }
+
     if (getConnections().length === 0) {
         console.log(chalk.yellow('No connections found. Add one with "sshya add"'));
         process.exit(0);

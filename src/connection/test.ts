@@ -1,58 +1,92 @@
 import chalk from 'chalk';
-import { spawn } from 'child_process';
-import { expandHomePath, getConnectionByAlias } from '../database';
-import { selectAlias } from '../helpers/selectAlias';
-import { buildRemoteCommand } from '../helpers/shell';
+import { getConnectionByAlias, type Connection } from '../database';
+import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { printJson } from '../output';
+import { executeSshCommand } from './run';
 
-export async function testConnectionPrompt(alias?: string): Promise<void> {
+export interface TestOptions {
+  timeoutMs?: number;
+  json?: boolean;
+}
 
-    if (!alias) {
-        alias = await selectAlias('Select a connection to test');
+export interface TestResult {
+  alias: string;
+  ok: boolean;
+  exitCode: number | null;
+  stderr: string;
+  timedOut: boolean;
+  durationMs: number;
+}
+
+export const testConnection = async (
+  connection: Connection,
+  options: TestOptions = {},
+): Promise<TestResult> => {
+  const result = await executeSshCommand(connection, 'true', {
+    batchMode: true,
+    tty: false,
+    cwd: true,
+    connectTimeout: Math.max(1, Math.ceil((options.timeoutMs ?? 5000) / 1000)),
+    timeoutMs: options.timeoutMs,
+  });
+
+  return {
+    alias: connection.alias,
+    ok: result.exitCode === 0 && !result.timedOut,
+    exitCode: result.exitCode,
+    stderr: result.stderr,
+    timedOut: result.timedOut,
+    durationMs: result.durationMs,
+  };
+};
+
+const resolveAlias = (term: string): string | undefined => {
+  if (getConnectionByAlias(term)) {
+    return term;
+  }
+  return findAliasBySearchTerm(term);
+};
+
+export async function testConnectionPrompt(alias?: string, options: TestOptions = {}): Promise<void> {
+  const json = options.json === true;
+
+  if (!alias) {
+    if (!process.stdin.isTTY) {
+      console.error(chalk.red('Alias is required when stdin is not a TTY.'));
+      process.exit(1);
     }
+    alias = await selectAlias('Select a connection to test');
+  }
 
-    const connection = getConnectionByAlias(alias);
-    if (!connection) {
-        console.error(chalk.red('Alias not found'));
-        return;
+  const resolvedAlias = resolveAlias(alias);
+  const connection = resolvedAlias ? getConnectionByAlias(resolvedAlias) : undefined;
+
+  if (!connection) {
+    if (json) {
+      printJson({ alias, ok: false, error: 'Alias not found' });
+    } else {
+      console.error(chalk.red(`Alias not found: ${alias}`));
     }
-
-    const { user, host, key_path, port, remote_path } = connection;
-    console.log(`\nTesting connection to ${chalk.blue(alias)}...`);
-
-    const testPromise = new Promise<{ code: number | null; stderr: string }>((resolve) => {
-        const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'];
-        if (key_path) args.push('-i', expandHomePath(key_path) ?? key_path);
-        if (port) args.push('-p', String(port));
-        args.push(`${user}@${host}`);
-        if (remote_path) {
-            const remoteCommand = buildRemoteCommand({
-                remotePath: remote_path,
-                postCommand: 'exit',
-            });
-            if (remoteCommand) {
-                args.push('-t', remoteCommand);
-            }
-        } else {
-            args.push('exit');
-        }
-
-        const child = spawn('ssh', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-        let stderr = '';
-        child.stderr.on('data', (data) => (stderr += data.toString()));
-        child.on('close', (code) => resolve({ code, stderr }));
-        child.on('error', (err) => resolve({ code: -1, stderr: err.message }));
-    });
-
-    const { code, stderr } = await testPromise;
-
-    if (code === 0) {
-        console.log(chalk.green('Connection successful!'));
-        return;
-    }
-
-    console.error(chalk.red('Connection failed.'));
-    if (stderr) {
-        console.error(chalk.grey(stderr.trim()));
-    }
+    process.exitCode = 1;
     return;
-} 
+  }
+
+  if (!json) {
+    console.log(`\nTesting connection to ${chalk.blue(connection.alias)}...`);
+  }
+
+  const result = await testConnection(connection, options);
+
+  if (json) {
+    printJson(result);
+  } else if (result.ok) {
+    console.log(chalk.green('Connection successful!'));
+  } else {
+    console.error(chalk.red('Connection failed.'));
+    if (result.stderr.trim()) {
+      console.error(chalk.grey(result.stderr.trim()));
+    }
+  }
+
+  process.exitCode = result.ok ? 0 : 1;
+}

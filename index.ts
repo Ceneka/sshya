@@ -3,12 +3,11 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
 import pkg from './package.json' with { type: "json" };
-import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
+import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
 import { runFzfLauncher } from './src/helpers/fzf';
-// built-in SSH handler removed
 
 const version = pkg?.version ?? '1.0.0';
 
@@ -19,6 +18,17 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
 initDB();
 
 const program = new Command();
+
+const secondsToMs = (value?: string): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return undefined;
+  }
+  return Math.round(seconds * 1000);
+};
 
 program
   .version(version)
@@ -31,30 +41,93 @@ program
   .action(connectConnectionPrompt);
 
 program
+  .command('run <alias> [command...]')
+  .aliases(['exec'])
+  .description('Run a non-interactive command over a stored connection')
+  .option('--tty', 'Allocate a remote TTY')
+  .option('--allow-password', 'Allow SSH to prompt for a password (BatchMode off)')
+  .option('--connect-timeout <seconds>', 'SSH ConnectTimeout in seconds', '10')
+  .option('--timeout <seconds>', 'Abort the remote command after this many seconds')
+  .option('--no-cwd', 'Do not cd into the connection remote path first')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string, commandParts: string[] | undefined, options: {
+    tty?: boolean;
+    allowPassword?: boolean;
+    connectTimeout?: string;
+    timeout?: string;
+    cwd?: boolean;
+    json?: boolean;
+  }) => {
+    return runConnectionPrompt(alias, commandParts ?? [], {
+      tty: !!options.tty,
+      batchMode: !options.allowPassword,
+      connectTimeout: Number(options.connectTimeout) || 10,
+      timeoutMs: secondsToMs(options.timeout),
+      cwd: options.cwd !== false,
+      json: !!options.json,
+    });
+  });
+
+program
   .command('copy [alias] [source] [destination]')
   .aliases(['sc', 'scp'])
   .description('Copy files using a stored SSH connection')
   .option('-d, --download', 'Copy from the remote host to a local destination')
   .option('-r, --recursive', 'Copy directories recursively')
   .option('-p, --preserve', 'Preserve modification times, access times, and modes')
-  .action((alias?: string, source?: string, destination?: string, options?: { download?: boolean; recursive?: boolean; preserve?: boolean }) => {
+  .option('--timeout <seconds>', 'Abort the transfer after this many seconds')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, source: string | undefined, destination: string | undefined, options: {
+    download?: boolean;
+    recursive?: boolean;
+    preserve?: boolean;
+    timeout?: string;
+    json?: boolean;
+  }) => {
     return copyConnectionPrompt(alias, source, destination, {
-      download: !!options?.download,
-      recursive: !!options?.recursive,
-      preserve: !!options?.preserve,
+      download: !!options.download,
+      recursive: !!options.recursive,
+      preserve: !!options.preserve,
+      timeoutMs: secondsToMs(options.timeout),
+      json: !!options.json,
     });
   });
 
 program
   .command('print [alias]')
   .description('Print an SSH connection by alias')
-  .action(printConnectionsPrompt);
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, options: { json?: boolean }) => printConnectionsPrompt(alias, options));
 
 program
-  .command('add')
+  .command('show [alias]')
+  .aliases(['inspect', 'get'])
+  .description('Show one connection with ready-to-run SSH commands')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, options: { json?: boolean }) => showConnectionPrompt(alias, options));
+
+program
+  .command('add [alias] [target]')
   .aliases(['create', 'new'])
-  .description('Add a new SSH connection')
-  .action(addConnectionPrompt);
+  .description('Add a new SSH connection (interactive when fields are omitted)')
+  .option('-u, --user <user>', 'SSH username')
+  .option('-H, --host <host>', 'Hostname or IP address')
+  .option('-p, --port <port>', 'SSH port')
+  .option('-k, --key <path>', 'Path to the private key')
+  .option('-r, --remote-path <path>', 'Default remote working directory')
+  .option('-f, --force', 'Replace a connection with the same alias')
+  .option('--test', 'Test connectivity after saving')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, target: string | undefined, options: {
+    user?: string;
+    host?: string;
+    port?: string;
+    key?: string;
+    remotePath?: string;
+    force?: boolean;
+    test?: boolean;
+    json?: boolean;
+  }) => addConnectionPrompt(alias, target, options));
 
 program
   .command('list')
@@ -62,39 +135,87 @@ program
   .description('List all SSH connections')
   .option('--oneline', 'Output each connection as ssh args on one line')
   .option('--names', 'Include alias as first column (tab-separated) with --oneline')
-  .action((options: { oneline?: boolean; names?: boolean }) => listConnectionsPrompt({ oneline: !!options?.oneline, names: !!options?.names }));
+  .option('--json', 'Machine-readable JSON output')
+  .action((options: { oneline?: boolean; names?: boolean; json?: boolean }) => listConnectionsPrompt({
+    oneline: !!options?.oneline,
+    names: !!options?.names,
+    json: !!options?.json,
+  }));
 
 program
   .command('remove [alias]')
   .aliases(['delete', 'rm'])
   .description('Remove an SSH connection by alias')
-  .action(removeConnectionPrompt);
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, options: { json?: boolean }) => removeConnectionPrompt(alias, options));
 
 program
   .command('update [alias]')
   .aliases(['edit'])
   .description('Update an SSH connection by alias')
-  .action(updateConnectionPrompt);
+  .option('-u, --user <user>', 'SSH username')
+  .option('-H, --host <host>', 'Hostname or IP address')
+  .option('-p, --port <port>', 'SSH port')
+  .option('-k, --key <path>', 'Path to the private key')
+  .option('-r, --remote-path <path>', 'Default remote working directory')
+  .option('--new-alias <alias>', 'Rename the connection')
+  .option('--test', 'Test connectivity after saving')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, options: {
+    user?: string;
+    host?: string;
+    port?: string;
+    key?: string;
+    remotePath?: string;
+    newAlias?: string;
+    test?: boolean;
+    json?: boolean;
+  }) => updateConnectionPrompt(alias, options));
 
 program
   .command('test [alias]')
   .description('Test an SSH connection by alias')
-  .action(testConnectionPrompt);
+  .option('--timeout <seconds>', 'Abort the test after this many seconds', '5')
+  .option('--json', 'Machine-readable JSON output')
+  .action((alias: string | undefined, options: { timeout?: string; json?: boolean }) => testConnectionPrompt(alias, {
+    timeoutMs: secondsToMs(options.timeout) ?? 5000,
+    json: !!options.json,
+  }));
 
 program
   .command('import [file]')
-  .description('Import connections from a JSON file')
-  .action(importConnectionsPrompt);
+  .description('Import connections from a JSON file (use - for stdin)')
+  .option('--strategy <strategy>', 'Conflict handling: ask, skip, overwrite, or error', 'ask')
+  .option('--json', 'Machine-readable JSON output')
+  .action((file: string | undefined, options: { strategy?: string; json?: boolean }) => {
+    if (!file) {
+      console.error(chalk.red('File is required. Use - to read from stdin.'));
+      process.exit(1);
+    }
+    return importConnectionsPrompt(file, {
+      strategy: options.strategy as 'ask' | 'skip' | 'overwrite' | 'error' | undefined,
+      json: !!options.json,
+    });
+  });
 
 program
   .command('export [file]')
-  .description('Export connections to a JSON file (default: sshm-export.json)')
-  .action(exportConnectionsPrompt);
+  .description('Export connections to a JSON file (use - for stdout)')
+  .option('--json', 'Machine-readable JSON output')
+  .action((file: string | undefined, options: { json?: boolean }) => exportConnectionsPrompt(file ?? 'sshm-export.json', options));
 
 program
   .command('fzf')
   .description('Select a connection with fzf and connect')
   .action(runFzfLauncher);
+
+program
+  .command('mcp')
+  .description('Start the sshya MCP server on stdio for agent integrations')
+  .action(async () => {
+    const { runMcpServer } = await import('./src/mcp/server');
+    await runMcpServer();
+  });
 
 program
   .command('path')
@@ -137,7 +258,7 @@ async function runFromProcess() {
   const userArgs = normalizeUserArgs(rawArgs);
   // Reconstruct argv array expected by commander: [node, script, ...userArgs]
   const argvForCommander: string[] = [process.argv[0] ?? '', process.argv[1] ?? '', ...userArgs];
-  program.parse(argvForCommander);
+  await program.parseAsync(argvForCommander);
 }
 
 // Only execute when this module is the entrypoint (prevents side effects during tests)

@@ -1,15 +1,30 @@
 import chalk from "chalk";
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage } from "../database";
+import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from "./ssh";
 import { buildRemoteCommand } from "./shell";
+import { jsonEnabled, printJson } from "../output";
 
-export async function printConnectionsPrompt(alias?: string) {
+export interface PrintOptions {
+  json?: boolean;
+}
+
+export async function printConnectionsPrompt(alias?: string, options: PrintOptions = {}) {
+  const json = jsonEnabled(options.json);
   if (!alias) {
-    console.error(chalk.red('Alias is required'));
+    if (json) {
+      printJson({ ok: false, error: 'Alias is required' });
+    } else {
+      console.error(chalk.red('Alias is required'));
+    }
     process.exit(1);
   }
   const connection = getConnectionByAlias(alias);
   if (!connection) {
-    console.error(chalk.red('Alias not found'));
+    if (json) {
+      printJson({ ok: false, error: `Alias not found: ${alias}` });
+    } else {
+      console.error(chalk.red('Alias not found'));
+    }
     process.exit(1);
   }
   // Record usage when connection is accessed via print (used by fzf)
@@ -35,5 +50,19 @@ export async function printConnectionsPrompt(alias?: string) {
       parts.push(remoteCommand);
     }
   }
+
+  if (json) {
+    const sshArgs = buildSshArgs(connection);
+    const interactiveArgs = buildInteractiveSshArgs(connection);
+    printJson({
+      alias: connection.alias,
+      sshArgs,
+      sshCommand: formatShellCommand('ssh', sshArgs),
+      interactiveSshArgs: interactiveArgs,
+      interactiveSshCommand: formatShellCommand('ssh', interactiveArgs),
+    });
+    return;
+  }
+
   console.log(parts.join(' '));
 }

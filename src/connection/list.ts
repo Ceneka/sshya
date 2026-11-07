@@ -1,10 +1,24 @@
 import chalk from "chalk";
 import os from "os";
 import { getConnections } from "../database";
+import { buildSshArgs, formatShellCommand } from "../helpers/ssh";
 import { buildRemoteCommand } from "../helpers/shell";
+import { jsonEnabled, printJson } from "../output";
 
-export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean }) {
+export async function listConnectionsPrompt(options?: { oneline?: boolean; names?: boolean; json?: boolean }) {
     let connections = getConnections();
+    if (jsonEnabled(options?.json)) {
+        printJson(connections.map((connection) => {
+            const args = buildSshArgs(connection);
+            return {
+                ...connection,
+                sshArgs: args,
+                sshCommand: formatShellCommand('ssh', args),
+            };
+        }));
+        return;
+    }
+
     if (options?.oneline) {
         // Sort by lastUsed descending so most recently used is first in the pipe;
         // fzf's default layout places the first line at the bottom near the cursor.

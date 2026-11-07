@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { spawn } from 'child_process';
-import { expandHomePath, getConnectionByAlias, recordConnectionUsage } from '../database';
-import { buildRemoteCommand } from '../helpers/shell';
+import { getConnectionByAlias, recordConnectionUsage } from '../database';
+import { buildInteractiveSshArgs } from '../helpers/ssh';
 import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
 
 export async function connectConnectionPrompt(alias?: string): Promise<void> {
@@ -19,31 +19,13 @@ export async function connectConnectionPrompt(alias?: string): Promise<void> {
     }
 
     if (!connection) {
-        console.error(chalk.red('Alias not found'));
+        console.error(chalk.red(`Alias not found: ${alias}`));
         process.exit(1);
     }
 
-    const args: string[] = [];
-    if (connection.key_path) {
-        args.push('-i', expandHomePath(connection.key_path) ?? connection.key_path);
-    }
-    if (connection.port) {
-        args.push('-p', String(connection.port));
-    }
+    const args = buildInteractiveSshArgs(connection);
 
-    args.push('-t', `${connection.user}@${connection.host}`);
-
-    if (connection.remote_path) {
-        const remoteCommand = buildRemoteCommand({
-            remotePath: connection.remote_path,
-            postCommand: 'exec "$SHELL" -l',
-        });
-        if (remoteCommand) {
-            args.push(remoteCommand);
-        }
-    }
-
-    recordConnectionUsage(alias);
+    recordConnectionUsage(connection.alias);
 
     const child = spawn('ssh', args, { stdio: 'inherit' });
     child.on('error', (error) => {

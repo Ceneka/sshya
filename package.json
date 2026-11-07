@@ -2,8 +2,8 @@
   "name": "sshya",
   "module": "index.ts",
   "type": "module",
-  "version": "0.4.0",
-  "description": "CLI for managing SSH connections with aliases, interactive prompts, and fzf integration",
+  "version": "0.5.0",
+  "description": "CLI and MCP server for managing SSH connections with aliases, interactive prompts, and agent-friendly JSON output",
   "license": "MIT",
   "author": "ceneka",
   "keywords": [
@@ -16,7 +16,10 @@
     "fuzzy-search",
     "bun",
     "terminal",
-    "devops"
+    "devops",
+    "mcp",
+    "model-context-protocol",
+    "ai-agents"
   ],
   "repository": {
     "type": "git",
@@ -30,16 +33,15 @@
     "@types/bun": "^1.4.2",
     "typescript": "^7.0.2"
   },
-  "peerDependencies": {
-    "typescript": ">=5.0.0"
-  },
   "scripts": {
     "start": "bun run index.ts",
+    "mcp": "bun run index.ts mcp",
     "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run typecheck"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "fuse.js": "^7.5.0",
