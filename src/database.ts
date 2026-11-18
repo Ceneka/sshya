@@ -140,15 +140,23 @@ export const initDB = () => {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
+  const dbPath = getDbPath();
+
   // Initialize empty database file if it does not exist
-  if (!fs.existsSync(getDbPath())) {
+  if (!fs.existsSync(dbPath)) {
     writeDB([]);
     return;
   }
 
-  // Normalize any existing data on disk once during init
+  // Normalize any existing data on disk once during init, but do not rewrite a
+  // store that is already normalized. `--version`, `--help`, and read-only
+  // commands must not touch the file (and its mtime) just because they loaded.
   const existingData = readDB();
-  writeDB(existingData);
+  const normalized = JSON.stringify(existingData, null, 2);
+  const raw = fs.readFileSync(dbPath, 'utf-8');
+  if (raw !== normalized) {
+    writeDB(existingData);
+  }
 };
 
 export const addConnection = (

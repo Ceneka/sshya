@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import path from 'path';
 import { z } from 'zod';
 import pkg from '../../package.json' with { type: 'json' };
 import {
@@ -13,7 +14,7 @@ import {
   upsertConnection,
   type Connection,
 } from '../database';
-import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from '../helpers/ssh';
+import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand, quoteRemotePath } from '../helpers/ssh';
 import { executeCopy } from '../connection/copy';
 import { executeSshCommand } from '../connection/run';
 import { testConnection } from '../connection/test';
@@ -189,19 +190,25 @@ const registerTools = (server: McpServer): void => {
     'test_connection',
     {
       title: 'Test an SSH connection',
-      description: 'Open a batched, non-interactive SSH session and run `true`. Fails fast instead of prompting for a password.',
+      description: 'Open a batched, non-interactive SSH session and run `true`. Fails fast instead of prompting for a password. By default it trusts an unknown host key once (TOFU); pass acceptNewHostKey=false to keep strict host key checking.',
       inputSchema: {
         alias: z.string().min(1).describe('Exact connection alias'),
         timeoutMs: z.number().int().positive().optional().describe('Overall timeout in milliseconds (default 5000)'),
+        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
+        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ alias, timeoutMs }) => {
+    async ({ alias, timeoutMs, reuse, acceptNewHostKey }) => {
       const connection = getConnectionByAlias(alias);
       if (!connection) {
         return failResult(`Alias not found: ${alias}`);
       }
-      const result = await testConnection(connection, { timeoutMs: timeoutMs ?? 5000 });
+      const result = await testConnection(connection, {
+        timeoutMs: timeoutMs ?? 5000,
+        reuse: reuse !== false,
+        hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
+      });
       return ok(result, !result.ok);
     },
   );
@@ -210,16 +217,28 @@ const registerTools = (server: McpServer): void => {
     'run_command',
     {
       title: 'Run a command over SSH',
-      description: 'Run a non-interactive command on a stored connection and return stdout, stderr, and the exit code. The command is interpreted by the remote login shell. A TTY is not allocated unless tty=true.',
+      description: [
+        'Run a one-shot, non-interactive command on a stored connection and return stdout, stderr, and the exit code.',
+        'The command is interpreted by the remote login shell, so pipes, redirection, and && work; there is no persistent shell between calls.',
+        'Commands run from remotePath unless cwd=false. Each call is stateless: pass an explicit cd or use cwd.',
+        'Connections are pooled, so the first call pays the handshake and later calls are fast; pass reuse=false to force a fresh one.',
+        'Output is capped (default 64 KiB per stream) and truncation is reported; use maxOutputBytes or tail for large logs.',
+        'On failure, errorKind and hint explain the likely fix. Unknown host keys are trusted once by default; set acceptNewHostKey=false for strict checking.',
+      ].join(' '),
       inputSchema: {
         alias: z.string().min(1).describe('Exact connection alias'),
-        command: z.string().min(1).describe('Command to run on the remote host'),
+        command: z.string().min(1).describe('Command to run on the remote host (interpreted by the remote shell)'),
         cwd: z.boolean().optional().describe('cd into the connection remotePath first (default true)'),
         tty: z.boolean().optional().describe('Allocate a remote TTY (default false)'),
         timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured bytes per stream (default 65536)'),
+        tail: z.boolean().optional().describe('When truncated, keep the end instead of the start of the stream'),
+        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
+        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
+        stdin: z.string().max(2 * 1024 * 1024).optional().describe('Data to pipe into the remote command'),
       },
     },
-    async ({ alias, command, cwd, tty, timeoutMs }) => {
+    async ({ alias, command, cwd, tty, timeoutMs, maxOutputBytes, tail, reuse, acceptNewHostKey, stdin }) => {
       const connection = getConnectionByAlias(alias);
       if (!connection) {
         return failResult(`Alias not found: ${alias}`);
@@ -231,11 +250,177 @@ const registerTools = (server: McpServer): void => {
         tty: tty === true,
         cwd: cwd !== false,
         timeoutMs: timeoutMs ?? 120000,
+        maxOutputBytes,
+        outputMode: tail ? 'tail' : 'head',
+        reuse: reuse !== false,
+        hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
+        stdin,
+      });
+
+      return ok(result, !result.ok);
+    },
+  );
+
+  server.registerTool(
+    'run_on_many',
+    {
+      title: 'Run a command on several connections',
+      description: [
+        'Fan out one non-interactive command to several stored connections in a single call (max 50 aliases, default concurrency 4).',
+        'Results keep the input order and include stdout, stderr, exit code, truncation flags, errorKind, and hint.',
+        'Use this for fleet checks instead of one run_command call per host.',
+      ].join(' '),
+      inputSchema: {
+        aliases: z.array(z.string().min(1)).min(1).max(50).describe('Aliases to target'),
+        command: z.string().min(1).describe('Command to run on every host'),
+        cwd: z.boolean().optional().describe('cd into each connection remotePath first (default true)'),
+        timeoutMs: z.number().int().positive().optional().describe('Per-host timeout in milliseconds (default 120000)'),
+        concurrency: z.number().int().min(1).max(16).optional().describe('Parallel hosts (default 4)'),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured bytes per stream per host'),
+        tail: z.boolean().optional().describe('Keep the end of truncated output'),
+        acceptNewHostKey: z.boolean().optional().describe('Trust unknown host keys on first contact (default true)'),
+        failFast: z.boolean().optional().describe('Stop scheduling new hosts after the first failure'),
+      },
+    },
+    async ({ aliases, command, cwd, timeoutMs, concurrency, maxOutputBytes, tail, acceptNewHostKey, failFast }) => {
+      const uniqueAliases = [...new Set(aliases)];
+      const results = new Array<unknown>(uniqueAliases.length);
+      let cursor = 0;
+      let stop = false;
+
+      const worker = async () => {
+        while (!stop && cursor < uniqueAliases.length) {
+          const index = cursor;
+          cursor += 1;
+          const alias = uniqueAliases[index]!;
+          const connection = getConnectionByAlias(alias);
+
+          if (!connection) {
+            results[index] = { ok: false, alias, error: `Alias not found: ${alias}` };
+            if (failFast) {
+              stop = true;
+            }
+            continue;
+          }
+
+          recordConnectionUsage(alias);
+          const result = await executeSshCommand(connection, command, {
+            batchMode: true,
+            cwd: cwd !== false,
+            timeoutMs: timeoutMs ?? 120000,
+            maxOutputBytes,
+            outputMode: tail ? 'tail' : 'head',
+            reuse: true,
+            hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
+          });
+          results[index] = result;
+          if (!result.ok && failFast) {
+            stop = true;
+          }
+        }
+      };
+
+      const workers = Math.min(concurrency ?? 4, uniqueAliases.length);
+      await Promise.all(Array.from({ length: workers }, worker));
+
+      // Workers always fill every slot unless failFast stopped them.
+      for (let index = 0; index < results.length; index += 1) {
+        if (results[index] === undefined) {
+          results[index] = {
+            ok: false,
+            alias: uniqueAliases[index],
+            error: 'Skipped because failFast stopped the batch',
+          };
+        }
+      }
+
+      const settled = results as Array<{ ok: boolean }>;
+      const succeeded = settled.filter(result => result.ok).length;
+      const summary = {
+        total: uniqueAliases.length,
+        succeeded,
+        failed: uniqueAliases.length - succeeded,
+      };
+
+      return ok(
+        { ok: summary.failed === 0, summary, results },
+        summary.failed > 0,
+      );
+    },
+  );
+
+  server.registerTool(
+    'write_remote_file',
+    {
+      title: 'Write a remote file',
+      description: [
+        'Write a file on a stored connection by piping bytes through SSH (no scp temp file).',
+        'Content is UTF-8 by default; set encoding=base64 for binary data. Paths are relative to remotePath unless absolute.',
+        'Pass append=true to append, createParents=true to mkdir -p first, and mode to chmod afterwards.',
+        'The write is not atomic: a failed transfer can leave a partial file. Use run_command with a temporary path when that matters.',
+      ].join(' '),
+      inputSchema: {
+        alias: z.string().min(1).describe('Exact connection alias'),
+        path: z.string().min(1).describe('Remote path (absolute, or relative to remotePath)'),
+        content: z.string().max(2 * 1024 * 1024).describe('File contents (UTF-8 text, or base64 when encoding=base64)'),
+        encoding: z.enum(['utf8', 'base64']).optional().describe('How to decode content (default utf8)'),
+        append: z.boolean().optional().describe('Append instead of truncating (default false)'),
+        createParents: z.boolean().optional().describe('Run mkdir -p on the parent directory first'),
+        mode: z.string().regex(/^[0-7]{3,4}$/).optional().describe('chmod mode such as 600 or 0644'),
+        timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
+        acceptNewHostKey: z.boolean().optional().describe('Trust an unknown host key on first contact (default true)'),
+      },
+    },
+    async ({ alias, path: remotePath, content, encoding, append, createParents, mode, timeoutMs, acceptNewHostKey }) => {
+      const connection = getConnectionByAlias(alias);
+      if (!connection) {
+        return failResult(`Alias not found: ${alias}`);
+      }
+
+      let data: Buffer;
+      try {
+        data = Buffer.from(content, encoding === 'base64' ? 'base64' : 'utf8');
+      } catch (error) {
+        return failResult(`Invalid ${encoding ?? 'utf8'} content: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const quotedPath = quoteRemotePath(remotePath);
+      const parent = path.posix.dirname(remotePath);
+      const commands: string[] = [];
+
+      if (createParents && parent !== '.' && parent !== '/') {
+        commands.push(`mkdir -p -- ${quoteRemotePath(parent)}`);
+      }
+
+      commands.push(`cat ${append ? '>>' : '>'} ${quotedPath}`);
+      if (mode) {
+        commands.push(`chmod ${mode} -- ${quotedPath}`);
+      }
+
+      recordConnectionUsage(alias);
+      const result = await executeSshCommand(connection, commands.join(' && '), {
+        batchMode: true,
+        cwd: true,
+        timeoutMs: timeoutMs ?? 120000,
+        reuse: true,
+        hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
+        stdin: data,
+        maxOutputBytes: 16 * 1024,
       });
 
       return ok(
-        { ok: result.exitCode === 0 && !result.timedOut, ...result },
-        result.exitCode !== 0 || result.timedOut,
+        {
+          ok: result.ok,
+          alias,
+          path: remotePath,
+          bytesWritten: result.ok ? data.byteLength : 0,
+          encoding: encoding ?? 'utf8',
+          appended: append === true,
+          reused: result.reused,
+          durationMs: result.durationMs,
+          ...(result.ok ? {} : { errorKind: result.errorKind, hint: result.hint, stderr: result.stderr }),
+        },
+        !result.ok,
       );
     },
   );
@@ -244,7 +429,7 @@ const registerTools = (server: McpServer): void => {
     'copy_file',
     {
       title: 'Copy a file over SCP',
-      description: 'Upload or download a file or directory using a stored connection.',
+      description: 'Upload or download a file or directory using a stored connection. Unknown host keys are trusted once by default (TOFU); set acceptNewHostKey=false for strict checking. Connections are pooled when possible.',
       inputSchema: {
         alias: z.string().min(1).describe('Exact connection alias'),
         source: z.string().min(1),
@@ -253,9 +438,11 @@ const registerTools = (server: McpServer): void => {
         recursive: z.boolean().optional(),
         preserve: z.boolean().optional(),
         timeoutMs: z.number().int().positive().optional(),
+        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
+        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
       },
     },
-    async ({ alias, source, destination, direction, recursive, preserve, timeoutMs }) => {
+    async ({ alias, source, destination, direction, recursive, preserve, timeoutMs, reuse, acceptNewHostKey }) => {
       const connection = getConnectionByAlias(alias);
       if (!connection) {
         return failResult(`Alias not found: ${alias}`);
@@ -267,12 +454,11 @@ const registerTools = (server: McpServer): void => {
         recursive: recursive === true,
         preserve: preserve === true,
         timeoutMs,
+        reuse: reuse !== false,
+        hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
       });
 
-      return ok(
-        { ok: result.exitCode === 0 && !result.timedOut, ...result },
-        result.exitCode !== 0 || result.timedOut,
-      );
+      return ok(result, !result.ok);
     },
   );
 
@@ -393,6 +579,49 @@ const registerTools = (server: McpServer): void => {
       }],
     }),
   );
+
+  server.registerResource(
+    'guide',
+    'sshya://guide',
+    {
+      title: 'Using sshya from an agent',
+      description: 'Conventions and recipes for calling sshya over MCP.',
+      mimeType: 'text/markdown',
+    },
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        mimeType: 'text/markdown',
+        text: [
+          '# sshya for agents',
+          '',
+          '## Mental model',
+          '- Each `run_command` is an independent, non-interactive shell. There is no live shell between calls: `cd` and exports do not persist.',
+          '- Pass `cwd: true` (the default) to start in the stored `remote_path`, or include `cd /path && ...` in the command.',
+          '- Connections are pooled with OpenSSH ControlMaster. The first call pays the handshake; later calls usually attach to a warm session (`reused: true`).',
+          '- `BatchMode=yes`, `-T`, and a connect timeout are always on. Password prompts fail instead of hanging.',
+          '',
+          '## Output',
+          '- stdout and stderr are capped (64 KiB per stream by default). Every result reports `stdoutBytes`, `stderrBytes`, and `*Truncated`.',
+          '- For logs, either add `| tail -n 100` to the command or pass `tail: true` / `maxOutputBytes`.',
+          '- `ok` is true only when the remote exit code is 0 and the command did not time out.',
+          '',
+          '## Failure handling',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `unknown`, `ssh-missing`.',
+          '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` for sudo.',
+          '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
+          '',
+          '## Files',
+          '- `copy_file` uses scp for uploads/downloads.',
+          '- `write_remote_file` pipes bytes through SSH; it is convenient for configs and small binary payloads but is not atomic.',
+          '',
+          '## Safety',
+          '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',
+          '- Connection details are stored locally in `~/.sshya/sshm.json`; set `SSHYA_DB` to isolate an agent workspace.',
+        ].join('\n'),
+      }],
+    }),
+  );
 };
 
 export const createMcpServer = (): McpServer => {
@@ -405,8 +634,12 @@ export const createMcpServer = (): McpServer => {
       instructions: [
         'Manage and use stored SSH connections.',
         'Call list_connections to discover aliases before running commands.',
-        'Use run_command for non-interactive work; use print_ssh_command with interactive=true only when a human needs a shell.',
-        'run_command and test_connection use BatchMode=yes, so password prompts fail instead of hanging.',
+        'run_command is a one-shot non-interactive shell; state does not persist between calls. Set cwd or include cd in the command.',
+        'Connections are pooled, so repeated calls reuse a warm SSH session; pass reuse=false to force a fresh one.',
+        'Output is capped and reports truncation; use maxOutputBytes or tail for large logs.',
+        'On failure read errorKind and hint before retrying; unknown host keys are trusted once by default (acceptNewHostKey=false disables that).',
+        'Use run_on_many for fleet checks, copy_file for transfers, and write_remote_file for small config writes.',
+        'Read the sshya://guide resource for conventions and examples.',
       ].join(' '),
     },
   );

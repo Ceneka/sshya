@@ -2,7 +2,10 @@ import chalk from 'chalk';
 import path from 'path';
 import { spawn } from 'child_process';
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
+import { ByteCapture, defaultMaxOutputBytes } from '../helpers/capture';
+import { classifySshError, spawnFailure, type SshErrorKind } from '../helpers/errors';
 import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { buildSshOptionArgs, type HostKeyChecking } from '../helpers/ssh';
 import { jsonEnabled, printJson } from '../output';
 
 export interface CopyOptions {
@@ -12,6 +15,12 @@ export interface CopyOptions {
     json?: boolean;
     /** Abort the transfer after this many milliseconds. */
     timeoutMs?: number;
+    /** Fail instead of prompting for a password. Defaults to true. */
+    batchMode?: boolean;
+    /** Reuse a pooled ControlMaster connection. Defaults to true. */
+    reuse?: boolean;
+    /** First-contact host key policy. */
+    hostKeyChecking?: HostKeyChecking;
 }
 
 interface NormalizedCopyArgs {
@@ -21,12 +30,15 @@ interface NormalizedCopyArgs {
 }
 
 export interface CopyResult {
+    ok: boolean;
     alias: string;
     exitCode: number | null;
     stdout: string;
     stderr: string;
     timedOut: boolean;
     durationMs: number;
+    errorKind?: SshErrorKind;
+    hint?: string;
 }
 
 const isAbsoluteRemotePath = (value: string): boolean => {
@@ -52,7 +64,7 @@ export const buildCopyArgs = (
     connection: Connection,
     source: string,
     destination: string,
-    options: Pick<CopyOptions, 'download' | 'recursive' | 'preserve'> = {},
+    options: Pick<CopyOptions, 'download' | 'recursive' | 'preserve' | 'batchMode' | 'reuse' | 'hostKeyChecking'> = {},
 ): string[] => {
     const args: string[] = [];
     if (connection.key_path) {
@@ -61,6 +73,12 @@ export const buildCopyArgs = (
     if (connection.port) {
         args.push('-P', String(connection.port));
     }
+    args.push(...buildSshOptionArgs(connection, {
+        batchMode: options.batchMode ?? true,
+        connectTimeout: 10,
+        reuse: options.reuse,
+        hostKeyChecking: options.hostKeyChecking,
+    }));
     if (options.recursive) {
         args.push('-r');
     }
@@ -85,26 +103,53 @@ export const executeCopy = (
     mode: 'inherit' | 'capture' = 'capture',
 ): Promise<CopyResult> => {
     const startedAt = Date.now();
-    const args = buildCopyArgs(connection, source, destination, options);
+    const args = buildCopyArgs(connection, source, destination, {
+        ...options,
+        batchMode: options.batchMode ?? true,
+        reuse: options.reuse ?? true,
+    });
+    const maxBytes = defaultMaxOutputBytes();
+    const stdoutCapture = new ByteCapture({ maxBytes });
+    const stderrCapture = new ByteCapture({ maxBytes: Math.min(maxBytes, 16 * 1024) });
 
     return new Promise<CopyResult>((resolve) => {
-        const child = spawn('scp', args, {
-            stdio: mode === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+        const child = spawn(process.env.SSHYA_SCP_BIN?.trim() || 'scp', args, {
+            stdio: mode === 'inherit' ? ['inherit', 'inherit', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+            detached: process.platform !== 'win32',
         });
 
-        let stdout = '';
-        let stderr = '';
+        const killChild = (signal: NodeJS.Signals) => {
+            if (child.pid === undefined) {
+                return;
+            }
+            try {
+                if (process.platform !== 'win32') {
+                    process.kill(-child.pid, signal);
+                } else {
+                    child.kill(signal);
+                }
+            } catch {
+                try {
+                    child.kill(signal);
+                } catch {
+                    // The process already exited.
+                }
+            }
+        };
+
         let timedOut = false;
         let settled = false;
+        let spawnError: string | undefined;
 
-        if (mode === 'capture') {
-            child.stdout?.on('data', (chunk: Buffer | string) => {
-                stdout += chunk.toString();
-            });
-            child.stderr?.on('data', (chunk: Buffer | string) => {
-                stderr += chunk.toString();
-            });
-        }
+        child.stdout?.on('data', (chunk: Buffer | string) => {
+            stdoutCapture.write(chunk);
+        });
+        child.stderr?.on('data', (chunk: Buffer | string) => {
+            stderrCapture.write(chunk);
+            if (mode === 'inherit') {
+                process.stderr.write(chunk);
+            }
+        });
 
         let killTimer: NodeJS.Timeout | undefined;
         let forceKillTimer: NodeJS.Timeout | undefined;
@@ -112,33 +157,45 @@ export const executeCopy = (
         if (options.timeoutMs && options.timeoutMs > 0) {
             killTimer = setTimeout(() => {
                 timedOut = true;
-                child.kill('SIGTERM');
-                forceKillTimer = setTimeout(() => child.kill('SIGKILL'), 2000);
+                killChild('SIGTERM');
+                forceKillTimer = setTimeout(() => {
+                    killChild('SIGKILL');
+                    const settleTimer = setTimeout(() => finish(null), 500);
+                    settleTimer.unref?.();
+                }, 2000);
                 forceKillTimer.unref?.();
             }, options.timeoutMs);
         }
 
-        const finish = (exitCode: number | null, extraStderr?: string) => {
+        const finish = (exitCode: number | null) => {
             if (settled) {
                 return;
             }
             settled = true;
             if (killTimer) clearTimeout(killTimer);
             if (forceKillTimer) clearTimeout(forceKillTimer);
-            if (extraStderr) {
-                stderr += extraStderr;
-            }
+            const ok = exitCode === 0 && !timedOut;
+            const stderr = stderrCapture.text();
+            const failure = spawnError
+                ? spawnFailure(spawnError)
+                : classifySshError(stderr, { timedOut, exitCode, timeoutMs: options.timeoutMs });
+
             resolve({
+                ok,
                 alias: connection.alias,
                 exitCode,
-                stdout,
+                stdout: stdoutCapture.text(),
                 stderr,
                 timedOut,
                 durationMs: Date.now() - startedAt,
+                ...(failure ? { errorKind: failure.kind, hint: failure.hint } : {}),
             });
         };
 
-        child.on('error', (error: Error) => finish(-1, error.message));
+        child.on('error', (error: Error) => {
+            spawnError = error.message;
+            finish(-1);
+        });
         child.on('close', (code) => finish(code));
     });
 };
@@ -220,18 +277,29 @@ export async function copyConnectionPrompt(
         connection,
         source,
         destination,
-        { download, recursive, preserve, timeoutMs: options.timeoutMs },
+        {
+            download,
+            recursive,
+            preserve,
+            timeoutMs: options.timeoutMs,
+            reuse: options.reuse,
+            hostKeyChecking: options.hostKeyChecking,
+        },
         json ? 'capture' : 'inherit',
     );
 
     if (json) {
-        printJson({ ok: result.exitCode === 0 && !result.timedOut, ...result });
+        printJson(result);
     } else if (result.timedOut) {
         console.error(chalk.red(`Transfer timed out after ${options.timeoutMs}ms`));
-    } else if (result.exitCode === -1 && result.stderr.trim()) {
-        console.error(chalk.red(result.stderr.trim()));
-    } else if (result.exitCode !== 0) {
-        console.error(chalk.red(`scp exited with code ${result.exitCode}`));
+        if (result.hint) {
+            console.error(chalk.grey(result.hint));
+        }
+    } else if (!result.ok) {
+        console.error(chalk.red(result.exitCode === -1 ? (result.stderr.trim() || 'scp failed.') : `scp exited with code ${result.exitCode}`));
+        if (result.hint) {
+            console.error(chalk.grey(`Hint: ${result.hint}`));
+        }
     }
 
     process.exitCode = result.timedOut ? 124 : (result.exitCode ?? 1);

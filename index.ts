@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
 
 import chalk from 'chalk';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import pkg from './package.json' with { type: "json" };
-import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, removeConnectionPrompt, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
+import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, doctorCommand, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, poolCommand, removeConnectionPrompt, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
+import { parseByteSize } from './src/helpers/capture';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
 import { runFzfLauncher } from './src/helpers/fzf';
+import type { HostKeyChecking } from './src/helpers/ssh';
 
 const version = pkg?.version ?? '1.0.0';
 
@@ -15,9 +17,17 @@ if (process.stdin.isTTY && process.stdout.isTTY) {
   enableEscapeExit();
 }
 
-initDB();
-
 const program = new Command();
+
+// Initialize the store lazily, only when a command actually runs. `--version`,
+// `--help`, and a bare `sshya` must not create or rewrite the database.
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  const commandName = actionCommand.name();
+  if (commandName === 'about' || commandName === 'path') {
+    return;
+  }
+  initDB();
+});
 
 const secondsToMs = (value?: string): number | undefined => {
   if (value === undefined) {
@@ -28,6 +38,31 @@ const secondsToMs = (value?: string): number | undefined => {
     return undefined;
   }
   return Math.round(seconds * 1000);
+};
+
+const parseByteSizeOption = (value: string): number => {
+  const bytes = parseByteSize(value);
+  if (!bytes) {
+    throw new InvalidArgumentError('Expected a size such as 64k, 1m, or 65536.');
+  }
+  return bytes;
+};
+
+const resolveHostKeyChecking = (options: {
+  acceptNewHostKey?: boolean;
+  strictHostKey?: boolean;
+}): HostKeyChecking | undefined => {
+  if (options.acceptNewHostKey && options.strictHostKey) {
+    console.error(chalk.red('--accept-new-host-key and --strict-host-key are mutually exclusive.'));
+    process.exit(1);
+  }
+  if (options.acceptNewHostKey) {
+    return 'accept-new';
+  }
+  if (options.strictHostKey) {
+    return 'strict';
+  }
+  return undefined;
 };
 
 program
@@ -49,6 +84,11 @@ program
   .option('--connect-timeout <seconds>', 'SSH ConnectTimeout in seconds', '10')
   .option('--timeout <seconds>', 'Abort the remote command after this many seconds')
   .option('--no-cwd', 'Do not cd into the connection remote path first')
+  .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
+  .option('--max-output <size>', 'Cap captured output per stream (e.g. 64k, 1m)', parseByteSizeOption)
+  .option('--tail', 'Keep the end instead of the start when output is truncated')
+  .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
+  .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
   .action((alias: string, commandParts: string[] | undefined, options: {
     tty?: boolean;
@@ -56,6 +96,11 @@ program
     connectTimeout?: string;
     timeout?: string;
     cwd?: boolean;
+    reuse?: boolean;
+    maxOutput?: number;
+    tail?: boolean;
+    acceptNewHostKey?: boolean;
+    strictHostKey?: boolean;
     json?: boolean;
   }) => {
     return runConnectionPrompt(alias, commandParts ?? [], {
@@ -64,6 +109,10 @@ program
       connectTimeout: Number(options.connectTimeout) || 10,
       timeoutMs: secondsToMs(options.timeout),
       cwd: options.cwd !== false,
+      reuse: options.reuse !== false,
+      maxOutputBytes: options.maxOutput,
+      outputMode: options.tail ? 'tail' : 'head',
+      hostKeyChecking: resolveHostKeyChecking(options),
       json: !!options.json,
     });
   });
@@ -76,12 +125,18 @@ program
   .option('-r, --recursive', 'Copy directories recursively')
   .option('-p, --preserve', 'Preserve modification times, access times, and modes')
   .option('--timeout <seconds>', 'Abort the transfer after this many seconds')
+  .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
+  .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
+  .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
   .action((alias: string | undefined, source: string | undefined, destination: string | undefined, options: {
     download?: boolean;
     recursive?: boolean;
     preserve?: boolean;
     timeout?: string;
+    reuse?: boolean;
+    acceptNewHostKey?: boolean;
+    strictHostKey?: boolean;
     json?: boolean;
   }) => {
     return copyConnectionPrompt(alias, source, destination, {
@@ -89,6 +144,8 @@ program
       recursive: !!options.recursive,
       preserve: !!options.preserve,
       timeoutMs: secondsToMs(options.timeout),
+      reuse: options.reuse !== false,
+      hostKeyChecking: resolveHostKeyChecking(options),
       json: !!options.json,
     });
   });
@@ -176,9 +233,47 @@ program
   .command('test [alias]')
   .description('Test an SSH connection by alias')
   .option('--timeout <seconds>', 'Abort the test after this many seconds', '5')
+  .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
+  .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
+  .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: { timeout?: string; json?: boolean }) => testConnectionPrompt(alias, {
+  .action((alias: string | undefined, options: {
+    timeout?: string;
+    reuse?: boolean;
+    acceptNewHostKey?: boolean;
+    strictHostKey?: boolean;
+    json?: boolean;
+  }) => testConnectionPrompt(alias, {
     timeoutMs: secondsToMs(options.timeout) ?? 5000,
+    reuse: options.reuse !== false,
+    hostKeyChecking: resolveHostKeyChecking(options),
+    json: !!options.json,
+  }));
+
+program
+  .command('pool [action] [alias]')
+  .description('Inspect or close pooled SSH connections (list, close)')
+  .option('--all', 'Close every pooled connection (with close)')
+  .option('--json', 'Machine-readable JSON output')
+  .action((action: string | undefined, alias: string | undefined, options: { all?: boolean; json?: boolean }) =>
+    poolCommand(action, alias, options));
+
+program
+  .command('doctor')
+  .description('Check the local SSH setup, stored keys, pool, and optionally probe every connection')
+  .option('--probe', 'Run `true` on every stored connection')
+  .option('--timeout <seconds>', 'Probe timeout in seconds', '5')
+  .option('--accept-new-host-key', 'Trust unknown host keys while probing (TOFU)')
+  .option('--json', 'Machine-readable JSON output')
+  .action((options: {
+    probe?: boolean;
+    timeout?: string;
+    acceptNewHostKey?: boolean;
+    json?: boolean;
+  }) => doctorCommand({
+    probe: !!options.probe,
+    timeoutMs: secondsToMs(options.timeout) ?? 5000,
+    acceptNewHostKey: !!options.acceptNewHostKey,
     json: !!options.json,
   }));
 

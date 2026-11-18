@@ -1,16 +1,107 @@
 import { expandHomePath, type Connection } from '../database';
-import { buildRemoteCommand, wrapInSingleQuotes } from './shell';
+import {
+  controlSocketPath,
+  ensureControlDir,
+  getControlPersistSeconds,
+  reuseEnabled,
+} from './control';
+import { buildRemoteCommand, quoteRemotePath, quoteShellArg } from './shell';
+export { quoteShellArg, quoteRemotePath } from './shell';
 
-export interface SshArgsOptions {
-  /** Allocate a TTY (`-t`). Agents should leave this off (`-T`). */
-  tty?: boolean;
-  /** Fail instead of prompting for a password. Defaults to false. */
+export type HostKeyChecking = 'strict' | 'accept-new' | 'ask';
+
+export interface SshOptionArgsOptions {
+  /** Fail instead of prompting for a password. */
   batchMode?: boolean;
   /** SSH ConnectTimeout in seconds. */
   connectTimeout?: number;
+  /** Reuse a pooled connection via ControlMaster. */
+  reuse?: boolean;
+  /** Seconds to keep the multiplexed master alive. */
+  controlPersist?: number;
+  /** First-contact host key policy. */
+  hostKeyChecking?: HostKeyChecking;
+  /** Keepalive interval in seconds; 0 disables it. */
+  serverAliveInterval?: number;
+}
+
+export interface SshArgsOptions extends SshOptionArgsOptions {
+  /** Allocate a TTY (`-t`). Agents should leave this off (`-T`). */
+  tty?: boolean;
   /** Include the stored port (`-p`). Defaults to true. */
   port?: boolean;
 }
+
+const envHostKeyChecking = (): HostKeyChecking | undefined => {
+  const value = process.env.SSHYA_HOST_KEY_CHECKING?.trim().toLowerCase();
+  if (value === 'strict' || value === 'yes') {
+    return 'strict';
+  }
+  if (value === 'accept-new' || value === 'accept_new') {
+    return 'accept-new';
+  }
+  if (value === 'ask') {
+    return 'ask';
+  }
+  return undefined;
+};
+
+const hostKeyCheckingValue = (mode: HostKeyChecking): string => {
+  if (mode === 'strict') {
+    return 'yes';
+  }
+  return mode;
+};
+
+/**
+ * Connection-level `-o` options shared by ssh and scp (identity/port flags are
+ * added by each caller because scp uses `-P` instead of `-p`).
+ */
+export const buildSshOptionArgs = (
+  connection: Connection,
+  options: SshOptionArgsOptions = {},
+): string[] => {
+  const args: string[] = [];
+
+  if (options.batchMode) {
+    args.push('-o', 'BatchMode=yes');
+  }
+
+  if (options.connectTimeout && options.connectTimeout > 0) {
+    args.push('-o', `ConnectTimeout=${Math.floor(options.connectTimeout)}`);
+  }
+
+  const aliveInterval = options.serverAliveInterval ?? 15;
+  if (aliveInterval > 0) {
+    args.push('-o', `ServerAliveInterval=${Math.floor(aliveInterval)}`);
+    args.push('-o', 'ServerAliveCountMax=3');
+  }
+
+  // Deterministic auth: when a key is stored, do not let a crowded ssh-agent
+  // produce "Too many authentication failures".
+  if (connection.key_path) {
+    args.push('-o', 'IdentitiesOnly=yes');
+  }
+
+  const hostKeyChecking = options.hostKeyChecking ?? envHostKeyChecking();
+  if (hostKeyChecking) {
+    args.push('-o', `StrictHostKeyChecking=${hostKeyCheckingValue(hostKeyChecking)}`);
+  }
+
+  if (options.reuse === true && reuseEnabled(true)) {
+    const dir = ensureControlDir();
+    if (dir) {
+      const socket = controlSocketPath(connection);
+      args.push(
+        '-o', 'ControlMaster=auto',
+        '-o', `ControlPath=${socket}`,
+        '-o', `ControlPersist=${getControlPersistSeconds(options.controlPersist)}`,
+      );
+    }
+  }
+
+  return args;
+};
 
 export const buildSshArgs = (connection: Connection, options: SshArgsOptions = {}): string[] => {
   const args: string[] = [];
@@ -23,13 +114,7 @@ export const buildSshArgs = (connection: Connection, options: SshArgsOptions = {
   }
 
   args.push(options.tty ? '-t' : '-T');
-
-  if (options.batchMode) {
-    args.push('-o', 'BatchMode=yes');
-  }
-  if (options.connectTimeout && options.connectTimeout > 0) {
-    args.push('-o', `ConnectTimeout=${Math.floor(options.connectTimeout)}`);
-  }
+  args.push(...buildSshOptionArgs(connection, options));
 
   args.push(`${connection.user}@${connection.host}`);
   return args;
@@ -52,7 +137,7 @@ export const buildRemoteCommandLine = (
   const remotePath = connection.remote_path?.trim();
 
   if (options.cwd !== false && remotePath) {
-    parts.push(`cd ${wrapInSingleQuotes(remotePath)}`);
+    parts.push(`cd ${quoteRemotePath(remotePath)}`);
   }
   if (command.trim().length > 0) {
     parts.push(command);
@@ -65,7 +150,7 @@ export const buildRemoteCommandLine = (
  * Arguments for a normal interactive login session (`sshya connect`).
  */
 export const buildInteractiveSshArgs = (connection: Connection): string[] => {
-  const args = buildSshArgs(connection, { tty: true });
+  const args = buildSshArgs(connection, { tty: true, reuse: false });
   const remoteCommand = buildRemoteCommand({
     remotePath: connection.remote_path,
     postCommand: 'exec "$SHELL" -l',
@@ -74,18 +159,6 @@ export const buildInteractiveSshArgs = (connection: Connection): string[] => {
     args.push(remoteCommand);
   }
   return args;
-};
-
-const SAFE_SHELL_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
-
-export const quoteShellArg = (value: string): string => {
-  if (value.length === 0) {
-    return "''";
-  }
-  if (SAFE_SHELL_ARG.test(value)) {
-    return value;
-  }
-  return `'${value.replace(/'/g, "'\\''")}'`;
 };
 
 /** Render an argv array as a copy-pasteable shell command. */

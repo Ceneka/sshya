@@ -3,7 +3,7 @@
   "module": "index.ts",
   "type": "module",
   "version": "0.5.0",
-  "description": "CLI and MCP server for managing SSH connections with aliases, interactive prompts, and agent-friendly JSON output",
+  "description": "CLI and MCP server for managing SSH connections with aliases, pooled connections, and LLM-friendly JSON output",
   "license": "MIT",
   "author": "ceneka",
   "keywords": [
@@ -19,7 +19,10 @@
     "devops",
     "mcp",
     "model-context-protocol",
-    "ai-agents"
+    "ai-agents",
+    "llm",
+    "agents",
+    "controlmaster"
   ],
   "repository": {
     "type": "git",
@@ -38,7 +41,8 @@
     "mcp": "bun run index.ts mcp",
     "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run typecheck"
+    "test": "bun test",
+    "prepublishOnly": "bun run typecheck && bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -52,6 +56,7 @@
     "index.ts",
     "s.ts",
     "src",
+    "!src/**/*.test.ts",
     "README.md"
   ],
   "engines": {
