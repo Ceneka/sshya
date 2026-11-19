@@ -62,7 +62,8 @@
 - `doctor [--probe]`: Checks ssh/scp, keys, agent, DB, pool, and optionally every alias
 - `fzf`: In-process fzf picker that connects to the selected alias
 - `s`: Shortcut entrypoint that always runs `connect` (interactive picker or alias)
-- `mcp`: Starts the stdio MCP server (`--aliases a,b`, `--read-only`)
+- `mcp`: Starts the stdio MCP server (`--aliases a,b`, `--read-only`, `--feedback`)
+- `reports [list|show|open|export|clear]`: Review agent problem reports from `--feedback` (`src/connection/reports.ts`)
 - `link set|show|unset` / `sync`: lazybackup link (see above)
 
 ### Output (`src/output.ts`)
@@ -90,6 +91,7 @@
 - Errors are actionable: unknown aliases return `errorKind: 'alias_not_found'` plus up to three `suggestions`; sudo failures classify as `tty` (`tty: true` / `sudo -n`) or `sudo_password` (NOPASSWD / `sudo -n`). Every `failResult` carries an `errorKind`.
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped at 8 KiB stdout + 4 KiB stderr (`headtail`), `cwd=true`. Keep tool descriptions to one short sentence and param descriptions to a few words; put details in `sshya://guide` so `tools/list` stays under ~1,800 tokens.
 - Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import. An allowlist that parses to zero patterns (for example `--aliases ,`) denies every alias instead of failing open.
+- Feedback (`src/mcp/feedback.ts`, `src/feedback/store.ts`): opt-in via `--feedback`/`SSHYA_MCP_FEEDBACK=1`; nothing changes when off. `instrumentToolCalls()` wraps `server.registerTool` before tools are registered and keeps the last 20 calls (tool, ms, reply bytes, `isError`/`errorKind`, `truncated`; never arguments or output). Replies at or above `SSHYA_MCP_LARGE_RESPONSE` (16 KiB) get an extra `sshya note` text item. `report_issue` appends a report to `reports.jsonl` (0600) next to the store; `sshya reports open` only builds a prefilled GitHub issue URL from `pkg.bugs.url`, so nothing leaves the machine without the user
 - Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, `write_remote_file`, and `replace_in_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution, and the read-only file tools (`read_remote_file`, `grep_remote`, `stat_remote`) stay because they only read; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
 - Guardrails: `copy`/`copy_file` refuse local operands that scp would interpret as remote (`host:path`) or that start with `-` (`errorKind: 'invalid-path'`), so a read-only download cannot become an upload to another host
 - Connections with `readonly: true` refuse `replace_in_remote_file`, `write_remote_file`, and `copy_file` uploads (`errorKind: 'connection_readonly'`); `run_command` is not restricted by the flag

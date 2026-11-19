@@ -20,6 +20,7 @@ import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
 import { loadConnectionSchema } from '../schema';
 import { autoSync } from '../link/sync';
+import { CallLog, FEEDBACK_NOTE, instrumentToolCalls, registerReportTool } from './feedback';
 import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
@@ -916,6 +917,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           ...(policy.hasAliasAllowlist
             ? ['- Tools that target an alias outside this list return `errorKind: "alias_not_allowed"` and do not touch the host.']
             : []),
+          `- Feedback: ${policy.feedback ? 'on (report_issue is available)' : 'off'}.`,
           '',
           '## Tools',
           policy.readOnly
@@ -957,6 +959,17 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           '- Read-only mode guards the sshya store against MCP mutations and the remote host against uploads. It does not sandbox anything: run_command and run_on_many can still change anything the SSH user can, and copy_file downloads still write local files at the chosen path.',
           '- Connection details are stored locally in `~/.sshya/sshm.json`; set `SSHYA_DB` to isolate an agent workspace.',
           '- Connections marked `linked: true` come from a lazybackup instance (`sshya link`), which is their source of truth. Alias/user/host/port changes and removal are refused with `errorKind: "linked_connection"`; only keyPath, remotePath, and readonly are local. The list refreshes from lazybackup automatically.',
+          ...(policy.feedback
+            ? [
+              '',
+              '## Reporting problems (feedback is on)',
+              '- Call `report_issue` when sshya itself misbehaves: a tool error that looks like a bug (`error`), a reply much larger than the task needed (`large_output`), a tool doing something you did not ask for (`unexpected_call`), a wrong or misleading result (`bad_result`), or a missing capability (`missing_feature`).',
+              '- Do not report ordinary remote failures (auth, dns, a failing command) unless sshya handled them wrongly.',
+              '- `summary` is one sentence; `details` says what you called, what you expected, and what happened. Never include secrets, tokens, private keys, or file contents.',
+              '- sshya attaches its version and metadata for the last 20 tool calls (tool, duration, reply size, error kind; no arguments or output). The report is saved locally; the user reviews it with `sshya reports` and decides whether to file it.',
+              '- Replies over the large-reply threshold carry an extra `sshya note` with their size.',
+            ]
+            : []),
         ].join('\n'),
       }],
     }),
@@ -984,11 +997,19 @@ export const createMcpServer = async (options: McpServerOptions = {}): Promise<M
         ...(policy.hasAliasAllowlist
           ? ['Aliases outside the allowlist are refused with errorKind "alias_not_allowed"; listings are filtered.']
           : []),
+        ...(policy.feedback ? [FEEDBACK_NOTE] : []),
       ].join(' '),
     },
   );
 
-  await registerTools(server, policy);
+  if (policy.feedback) {
+    const log = new CallLog();
+    instrumentToolCalls(server, log);
+    await registerTools(server, policy);
+    await registerReportTool(server, policy, log);
+  } else {
+    await registerTools(server, policy);
+  }
   return server;
 };
 

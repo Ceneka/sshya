@@ -101,6 +101,8 @@ Notes for scripting:
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
 | `SSHYA_MCP_ALLOW` | unset | Alias allowlist for `sshya mcp` (comma-separated, supports `*`/`?` globs) |
 | `SSHYA_MCP_READ_ONLY` | unset | `1` removes MCP tools that mutate the store or write files |
+| `SSHYA_MCP_FEEDBACK` | unset | `1` enables the opt-in `report_issue` tool (see [Agent feedback](#agent-feedback-opt-in)) |
+| `SSHYA_MCP_LARGE_RESPONSE` | `16384` | With feedback on, replies at least this many bytes get a size note |
 | `SSHYA_LINK_URL` / `SSHYA_LINK_TOKEN` | unset | Override the lazybackup link URL/token from `link.json` |
 | `SSHYA_CF_ACCESS_CLIENT_ID` / `SSHYA_CF_ACCESS_CLIENT_SECRET` | unset | Cloudflare Access service token for the link |
 | `SSHYA_LINK_TTL` | `300` | Seconds before auto-sync refreshes linked connections (`0` disables) |
@@ -251,6 +253,37 @@ Read-only mode guards the sshya store against MCP mutations and the remote host
 against uploads. It does **not** sandbox anything: `run_command` and
 `run_on_many` still execute arbitrary commands with the SSH user's permissions,
 and `copy_file` downloads still write local files at the caller-chosen path.
+
+### Agent feedback (opt-in)
+
+`sshya mcp --feedback` (or `SSHYA_MCP_FEEDBACK=1`) lets the agent tell you when
+sshya itself misbehaves: a tool error that looks like a bug, a reply far larger
+than the task needed (wasted tokens), a call that did something unexpected, a
+wrong result, or a missing capability.
+
+- The server adds a `report_issue` tool (`category`, one-line `summary`,
+  optional `details` and `tool`). The agent is told not to include secrets or
+  file contents.
+- Each report carries the sshya version, the MCP client name, and metadata for
+  the last 20 tool calls: tool, duration, reply size, error kind, and whether
+  output was truncated. Arguments and output are never recorded.
+- Replies of at least 16 KiB (`SSHYA_MCP_LARGE_RESPONSE`) get an extra
+  `sshya note` with their size, so the agent can narrow the call or report it.
+- Reports are only saved locally, in `reports.jsonl` next to the store
+  (`~/.sshya/reports.jsonl`, mode 0600). Nothing is sent anywhere.
+
+Review them with the CLI:
+
+```sh
+sshya reports                 # list
+sshya reports show <id>       # full report (markdown); --json for raw
+sshya reports open <id>       # prefilled GitHub issue URL; --open launches a browser
+sshya reports export          # all reports as JSON
+sshya reports clear [id]      # delete one or all
+```
+
+`reports open` only builds the link: you review and edit the issue in the
+browser before anything is submitted.
 
 
 ## Technology Stack

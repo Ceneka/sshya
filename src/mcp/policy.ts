@@ -17,12 +17,16 @@ export interface McpPolicyOptions {
   aliases?: string | readonly string[];
   /** Remove mutating tools and refuse file uploads. */
   readOnly?: boolean;
+  /** Opt-in `report_issue` tool, call metadata, and large-reply notes. */
+  feedback?: boolean;
 }
 
 export interface McpPolicy {
   /** Patterns as configured, e.g. `['web', 'stg-*']`. */
   readonly aliasPatterns: readonly string[];
   readonly readOnly: boolean;
+  /** Opt-in agent feedback (`report_issue`). */
+  readonly feedback: boolean;
   /** True when at least one alias pattern was configured. */
   readonly hasAliasAllowlist: boolean;
   isAliasAllowed(alias: string): boolean;
@@ -68,6 +72,7 @@ export const createMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
   const hasAliasAllowlist = options.aliases !== undefined;
   const matchers = aliasPatterns.map(aliasPatternToRegExp);
   const readOnly = options.readOnly === true;
+  const feedback = options.feedback === true;
 
   const allowedAliasesLabel = (): string => {
     if (!hasAliasAllowlist) {
@@ -79,6 +84,7 @@ export const createMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
   return {
     aliasPatterns,
     readOnly,
+    feedback,
     hasAliasAllowlist,
     isAliasAllowed(alias: string): boolean {
       if (!hasAliasAllowlist) {
@@ -99,7 +105,8 @@ export const envFlagEnabled = (value?: string): boolean =>
 
 /**
  * Resolve the active policy. Explicit options win over environment variables;
- * omitted options fall back to `SSHYA_MCP_ALLOW` and `SSHYA_MCP_READ_ONLY`.
+ * omitted options fall back to `SSHYA_MCP_ALLOW`, `SSHYA_MCP_READ_ONLY`, and
+ * `SSHYA_MCP_FEEDBACK`.
  */
 export const resolveMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
   const envAllowlist = process.env.SSHYA_MCP_ALLOW?.trim();
@@ -109,6 +116,7 @@ export const resolveMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
       ? process.env.SSHYA_MCP_ALLOW
       : undefined;
   const readOnly = options.readOnly ?? envFlagEnabled(process.env.SSHYA_MCP_READ_ONLY);
+  const feedback = options.feedback ?? envFlagEnabled(process.env.SSHYA_MCP_FEEDBACK);
 
-  return createMcpPolicy({ aliases, readOnly });
+  return createMcpPolicy({ aliases, readOnly, feedback });
 };
