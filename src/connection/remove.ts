@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { getConnectionByAlias, removeConnection } from '../database';
 import { selectAlias } from '../helpers/selectAlias';
 import { jsonEnabled, printJson } from '../output';

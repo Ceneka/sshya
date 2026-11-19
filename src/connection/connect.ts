@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { spawn } from 'child_process';
 import { recordConnectionUsage } from '../database';
 import { buildInteractiveSshArgs } from '../helpers/ssh';

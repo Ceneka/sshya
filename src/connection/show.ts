@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from '../helpers/ssh';
 import { jsonEnabled, printJson } from '../output';

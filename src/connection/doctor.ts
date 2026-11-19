@@ -1,7 +1,7 @@
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import pkg from '../../package.json' with { type: 'json' };
 import { getConnections, getDbPath, type Connection } from '../database';
 import { defaultMaxOutputBytes } from '../helpers/capture';

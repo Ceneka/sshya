@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import fs from 'fs';
 import { getConnections } from '../database';
 import { jsonEnabled, printJson } from '../output';

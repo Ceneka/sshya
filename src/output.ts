@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from './lib/color';
 
 /**
  * True when a command should emit machine-readable output.

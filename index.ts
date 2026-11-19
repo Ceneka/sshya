@@ -73,7 +73,7 @@ const resolveHostKeyChecking = async (options: {
   strictHostKey?: boolean;
 }): Promise<HostKeyChecking | undefined> => {
   if (options.acceptNewHostKey && options.strictHostKey) {
-    const { default: chalk } = await import('chalk');
+    const { default: chalk } = await import('./src/lib/color');
     console.error(chalk.red('--accept-new-host-key and --strict-host-key are mutually exclusive.'));
     process.exit(1);
   }
@@ -341,7 +341,7 @@ program
   .option('--json', 'Machine-readable JSON output')
   .action(async (file: string | undefined, options: { strategy?: string; json?: boolean }) => {
     if (!file) {
-      const { default: chalk } = await import('chalk');
+      const { default: chalk } = await import('./src/lib/color');
       console.error(chalk.red('File is required. Use - to read from stdin.'));
       process.exit(1);
     }
@@ -386,7 +386,7 @@ program
   .command('path')
   .description('Provides instructions to make the CLI globally accessible')
   .action(async () => {
-    const { default: chalk } = await import('chalk');
+    const { default: chalk } = await import('./src/lib/color');
     console.log(chalk.yellow('To make the ' + chalk.bold('s') + ' command globally accessible:'));
     console.log('\n' + chalk.bold('Option 1: Permanent Installation (Recommended)') + '\n');
     console.log('1. Install the package globally: ' + chalk.cyan('npm install -g sshya'));
@@ -405,7 +405,7 @@ program
   .command('about')
   .description('About this CLI')
   .action(async () => {
-    const { default: chalk } = await import('chalk');
+    const { default: chalk } = await import('./src/lib/color');
     console.log(chalk.bold('SSHya CLI'));
     console.log(chalk.gray(`Version ${version}`));
     console.log(chalk.gray('https://github.com/ceneka/sshya'));

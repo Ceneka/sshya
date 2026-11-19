@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { getConnectionByAlias, upsertConnection, type Connection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { jsonEnabled, printJson } from '../output';

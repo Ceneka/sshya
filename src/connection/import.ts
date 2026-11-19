@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import fs from 'fs';
 import { addConnection, getConnectionByAlias, updateConnection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';

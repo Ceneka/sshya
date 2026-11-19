@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import path from 'path';
 import { spawn } from 'child_process';
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
