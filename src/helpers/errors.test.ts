@@ -18,6 +18,13 @@ describe('classifySshError', () => {
     expect(result?.kind).toBe('auth');
   });
 
+  test('explains how sshya constrains agent keys on auth failures', () => {
+    const result = classifySshError('Received disconnect: Too many authentication failures', { exitCode: 255 });
+    expect(result?.kind).toBe('auth');
+    expect(result?.hint).toContain('IdentitiesOnly=yes');
+    expect(result?.hint).not.toContain('IdentitiesOnly is not set');
+  });
+
   test('classifies DNS and port problems apart', () => {
     expect(classifySshError('ssh: Could not resolve hostname nope: Name or service not known', { exitCode: 255 })?.kind).toBe('dns');
     expect(classifySshError('ssh: connect to host example.com port 22: Connection refused', { exitCode: 255 })?.kind).toBe('refused');

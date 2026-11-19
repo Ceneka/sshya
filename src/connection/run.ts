@@ -2,7 +2,7 @@ import { spawn, type StdioOptions } from 'child_process';
 import chalk from 'chalk';
 import { recordConnectionUsage, type Connection } from '../database';
 import { ByteCapture, defaultMaxOutputBytes, type CaptureMode } from '../helpers/capture';
-import { hasControlSocket, reuseEnabled } from '../helpers/control';
+import { controlSocketStat, reuseEnabled } from '../helpers/control';
 import { classifySshError, spawnFailure, type SshErrorKind } from '../helpers/errors';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildRemoteCommandLine, buildSshArgs, type HostKeyChecking } from '../helpers/ssh';
@@ -112,7 +112,7 @@ export const executeSshCommand = (
   const outputMode = options.outputMode ?? 'head';
   const batchMode = options.batchMode ?? true;
   const reuse = reuseEnabled(options.reuse);
-  const reused = reuse && hasControlSocket(connection);
+  const socketBefore = reuse ? controlSocketStat(connection) : undefined;
   const timeoutMs = clampTimeoutMs(options.timeoutMs);
 
   const args = buildSshArgs(connection, {
@@ -257,6 +257,12 @@ export const executeSshCommand = (
       const stdout = stdoutCapture?.text() ?? '';
       const stderr = stderrCapture.text();
       const ok = exitCode === 0 && !timedOut;
+      const socketAfter = reuse ? controlSocketStat(connection) : undefined;
+      const reused = socketBefore !== undefined
+        && socketAfter !== undefined
+        && socketBefore.inode === socketAfter.inode
+        && socketBefore.mtimeMs === socketAfter.mtimeMs
+        && socketBefore.ctimeMs === socketAfter.ctimeMs;
       const failure = spawnError
         ? spawnFailure(spawnError)
         : classifySshError(stderr, {

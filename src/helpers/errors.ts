@@ -74,7 +74,7 @@ const rules: Rule[] = [
   {
     kind: 'auth',
     pattern: /Too many authentication failures/i,
-    hint: 'The server rejected too many keys. Make sure the connection stores the right `key_path`; sshya already passes `-i` and `IdentitiesOnly` is not set, so an agent with many keys can trigger this.',
+    hint: 'The server rejected too many keys. Store the right `key_path` on the connection: sshya passes `-i` and `IdentitiesOnly=yes` when a key is stored, so this usually means the key is not in the remote authorized_keys, the username is wrong, or no key_path is stored and ssh offered every agent key.',
     retryable: false,
   },
   {

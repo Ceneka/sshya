@@ -102,5 +102,36 @@ export const hasControlSocket = (connection: Connection): boolean => {
   }
 };
 
+export interface ControlSocketStat {
+  inode: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+/**
+ * Metadata for an existing control socket.
+ *
+ * A master that crashed can leave its socket file behind. `reused` must not
+ * trust a bare path: ssh will silently replace a stale socket with a fresh
+ * master. Keeping the stat before/after the command lets the caller detect
+ * that replacement (the inode/mtime changes) without spawning a separate
+ * `ssh -O check` on every run.
+ */
+export const controlSocketStat = (connection: Connection): ControlSocketStat | undefined => {
+  try {
+    const stat = fs.statSync(controlSocketPath(connection));
+    if (!stat.isSocket()) {
+      return undefined;
+    }
+    return {
+      inode: stat.ino,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
 export const controlTarget = (connection: Connection): string =>
   `${connection.user}@${connection.host}`;
