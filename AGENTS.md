@@ -33,12 +33,15 @@
 - `sshya pool list|close` inspects or drops masters with `ssh -O check|exit`
 
 ### Output and errors (`src/helpers/capture.ts`, `src/helpers/errors.ts`)
-- `ByteCapture` caps each stream (default 64 KiB), counts bytes/lines, preserves UTF-8 boundaries, and emits a truncation marker
+- `ByteCapture` caps each stream, counts bytes/lines, preserves UTF-8 boundaries, and emits a truncation marker. Modes: `head`, `tail`, and `headtail` (first ~N/2 + last ~N/2, tail kept in a fixed-size ring buffer, cuts preferred at newline boundaries)
+- Defaults: 16 KiB per stream for the CLI/JSON (`SSHYA_MAX_OUTPUT` overrides); MCP passes 8 KiB stdout + 4 KiB stderr in `headtail` mode
+- Results report `stdoutTruncated`/`stderrTruncated`; `truncation` (`head`|`tail`|`headtail`) is added only when something was actually cut
 - `classifySshError()` maps stderr to `errorKind` plus an actionable `hint`; timeouts win over other patterns
 
 ### Commands (`index.ts` / `s.ts`)
 - `add`/`remove`/`update`/`list`/`show`: Manage connections
-- `run [alias] -- <command...>`: Non-interactive remote command, streams or captures output; `--max-output`, `--tail`, `--no-reuse`, `--accept-new-host-key`
+- `run [alias] -- <command...>`: Non-interactive remote command, streams or captures output; `--max-output`, `--truncate head|tail|headtail`, `--tail` (deprecated alias for `--truncate tail`), `--no-reuse`, `--accept-new-host-key`
+  - `--json` capture defaults to 16 KiB per stream in `headtail` mode; non-JSON runs stream stdout and are not truncated
   - Non-interactive runs (`--json` or non-TTY stdout) default to a 120 s timeout; `--timeout 0` disables it
   - In capture/JSON mode a non-TTY stdin is streamed to the remote command; `--no-stdin` or `</dev/null` forces it off
 - Alias resolution is centralized in `resolveAliasForCommand()` (`src/helpers/selectAlias.ts`): exact matches always win, fuzzy matching only for interactive TTYs outside JSON mode, and failures return up to three suggestions
@@ -60,7 +63,7 @@
 - `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
 - Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions plus the active policy)
-- MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped, `cwd=true`
+- MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped at 8 KiB stdout + 4 KiB stderr (`headtail`), `cwd=true`
 - Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import. An allowlist that parses to zero patterns (for example `--aliases ,`) denies every alias instead of failing open.
 - Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
 - Guardrails: `copy`/`copy_file` refuse local operands that scp would interpret as remote (`host:path`) or that start with `-` (`errorKind: 'invalid-path'`), so a read-only download cannot become an upload to another host

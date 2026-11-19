@@ -51,6 +51,10 @@ const READ_ONLY_NOTE = [
   'It therefore guards the sshya store against MCP mutations and the remote host against uploads; it does not sandbox the remote host or the local filesystem.',
 ].join(' ');
 
+/** Agent defaults: one call must not cost more context than the whole tool list. */
+const MCP_DEFAULT_STDOUT_BYTES = 8 * 1024;
+const MCP_DEFAULT_STDERR_BYTES = 4 * 1024;
+
 const serializeConnection = (connection: Connection) => {
   const sshArgs = buildSshArgs(connection);
   return {
@@ -274,7 +278,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         'The command is interpreted by the remote login shell, so pipes, redirection, and && work; there is no persistent shell between calls.',
         'Commands run from remotePath unless cwd=false. Each call is stateless: pass an explicit cd or use cwd.',
         'Connections are pooled, so the first call pays the handshake and later calls are fast; pass reuse=false to force a fresh one.',
-        'Output is capped (default 64 KiB per stream) and truncation is reported; use maxOutputBytes or tail for large logs.',
+        'Output is capped (default 8 KiB stdout as head+tail, 4 KiB stderr) and truncation is reported; narrow large logs with grep, sed -n, or tail -n, or raise maxOutputBytes.',
         'On failure, errorKind and hint explain the likely fix. Unknown host keys are trusted once by default; set acceptNewHostKey=false for strict checking.',
         'This tool runs arbitrary commands and remains available even in read-only mode. Aliases outside the active MCP policy are refused before any SSH process starts.',
       ].join(' '),
@@ -284,14 +288,15 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         cwd: z.boolean().optional().describe('cd into the connection remotePath first (default true)'),
         tty: z.boolean().optional().describe('Allocate a remote TTY (default false)'),
         timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
-        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured bytes per stream (default 65536)'),
-        tail: z.boolean().optional().describe('When truncated, keep the end instead of the start of the stream'),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured stdout bytes (default 8192); stderr is capped at min(this, 4096). Narrow the command before raising it'),
+        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Where to cut output above the cap: "headtail" (default, first half + last half), "head", or "tail". Does not add tail -n'),
+        tail: z.boolean().optional().describe('Deprecated alias for truncate="tail"; prefer truncate'),
         reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
         acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
         stdin: z.string().max(2 * 1024 * 1024).optional().describe('Data to pipe into the remote command'),
       },
     },
-    async ({ alias, command, cwd, tty, timeoutMs, maxOutputBytes, tail, reuse, acceptNewHostKey, stdin }) => {
+    async ({ alias, command, cwd, tty, timeoutMs, maxOutputBytes, truncate, tail, reuse, acceptNewHostKey, stdin }) => {
       if (!policy.isAliasAllowed(alias)) {
         return aliasDenial(policy, alias);
       }
@@ -302,13 +307,15 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
 
       recordConnectionUsage(alias);
+      const stdoutMaxBytes = maxOutputBytes ?? MCP_DEFAULT_STDOUT_BYTES;
       const result = await executeSshCommand(connection, command, {
         batchMode: true,
         tty: tty === true,
         cwd: cwd !== false,
         timeoutMs: timeoutMs ?? 120000,
-        maxOutputBytes,
-        outputMode: tail ? 'tail' : 'head',
+        maxOutputBytes: stdoutMaxBytes,
+        stderrMaxOutputBytes: Math.min(stdoutMaxBytes, MCP_DEFAULT_STDERR_BYTES),
+        outputMode: truncate ?? (tail === true ? 'tail' : 'headtail'),
         reuse: reuse !== false,
         hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
         stdin,
@@ -324,7 +331,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       title: 'Run a command on several connections',
       description: [
         'Fan out one non-interactive command to several stored connections in a single call (max 50 aliases, default concurrency 4).',
-        'Results keep the input order and include stdout, stderr, exit code, truncation flags, errorKind, and hint.',
+        'Results keep the input order and include stdout, stderr, exit code, truncation flags, errorKind, and hint. Output is capped per host like run_command (8 KiB stdout head+tail, 4 KiB stderr by default).',
         'Use this for fleet checks instead of one run_command call per host.',
         'Every alias must be allowed by the active MCP policy; otherwise the whole call is refused before any SSH process starts.',
         'This tool runs arbitrary commands and remains available even in read-only mode.',
@@ -335,19 +342,22 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         cwd: z.boolean().optional().describe('cd into each connection remotePath first (default true)'),
         timeoutMs: z.number().int().positive().optional().describe('Per-host timeout in milliseconds (default 120000)'),
         concurrency: z.number().int().min(1).max(16).optional().describe('Parallel hosts (default 4)'),
-        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured bytes per stream per host'),
-        tail: z.boolean().optional().describe('Keep the end of truncated output'),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured stdout bytes per host (default 8192); stderr is capped at min(this, 4096)'),
+        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Where to cut output above the cap: "headtail" (default), "head", or "tail"'),
+        tail: z.boolean().optional().describe('Deprecated alias for truncate="tail"; prefer truncate'),
         acceptNewHostKey: z.boolean().optional().describe('Trust unknown host keys on first contact (default true)'),
         failFast: z.boolean().optional().describe('Stop scheduling new hosts after the first failure'),
       },
     },
-    async ({ aliases, command, cwd, timeoutMs, concurrency, maxOutputBytes, tail, acceptNewHostKey, failFast }) => {
+    async ({ aliases, command, cwd, timeoutMs, concurrency, maxOutputBytes, truncate, tail, acceptNewHostKey, failFast }) => {
       const uniqueAliases = [...new Set(aliases)];
       const deniedAlias = uniqueAliases.find(alias => !policy.isAliasAllowed(alias));
       if (deniedAlias !== undefined) {
         return aliasDenial(policy, deniedAlias);
       }
 
+      const stdoutMaxBytes = maxOutputBytes ?? MCP_DEFAULT_STDOUT_BYTES;
+      const outputMode = truncate ?? (tail === true ? 'tail' : 'headtail');
       const results = new Array<unknown>(uniqueAliases.length);
       let cursor = 0;
       let stop = false;
@@ -372,8 +382,9 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             batchMode: true,
             cwd: cwd !== false,
             timeoutMs: timeoutMs ?? 120000,
-            maxOutputBytes,
-            outputMode: tail ? 'tail' : 'head',
+            maxOutputBytes: stdoutMaxBytes,
+            stderrMaxOutputBytes: Math.min(stdoutMaxBytes, MCP_DEFAULT_STDERR_BYTES),
+            outputMode,
             reuse: true,
             hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
           });
@@ -736,8 +747,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- `BatchMode=yes`, `-T`, and a connect timeout are always on. Password prompts fail instead of hanging.',
           '',
           '## Output',
-          '- stdout and stderr are capped (64 KiB per stream by default). Every result reports `stdoutBytes`, `stderrBytes`, and `*Truncated`.',
-          '- For logs, either add `| tail -n 100` to the command or pass `tail: true` / `maxOutputBytes`.',
+          '- stdout and stderr are capped per stream. Defaults: 8 KiB stdout kept as head+tail (first half + last half) and 4 KiB stderr. Every result reports `stdoutBytes`, `stderrBytes`, and `*Truncated`; when anything was cut it also includes `truncation` (`head`, `tail`, or `headtail`).',
+          '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which end survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
           '- `ok` is true only when the remote exit code is 0 and the command did not time out.',
           '',
           '## Failure handling',
@@ -780,7 +791,7 @@ export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
         'Call list_connections to discover aliases before running commands.',
         'run_command is a one-shot non-interactive shell; state does not persist between calls. Set cwd or include cd in the command.',
         'Connections are pooled, so repeated calls reuse a warm SSH session; pass reuse=false to force a fresh one.',
-        'Output is capped and reports truncation; use maxOutputBytes or tail for large logs.',
+        'Output is capped (8 KiB stdout as head+tail, 4 KiB stderr by default) and reports truncation; narrow large output with grep/sed -n/tail -n, or raise maxOutputBytes.',
         'On failure read errorKind and hint before retrying; unknown host keys are trusted once by default (acceptNewHostKey=false disables that).',
         'Use run_on_many for fleet checks, copy_file for transfers, and write_remote_file for small config writes.',
         'Connections flagged readonly refuse write_remote_file and copy_file uploads.',

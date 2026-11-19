@@ -7,7 +7,7 @@ import { Command, InvalidArgumentError } from 'commander';
 import pkg from './package.json' with { type: "json" };
 import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, doctorCommand, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, poolCommand, removeConnectionPrompt, resolveRunTimeoutMs, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
-import { parseByteSize } from './src/helpers/capture';
+import { parseByteSize, type CaptureMode } from './src/helpers/capture';
 import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
 import { runFzfLauncher } from './src/helpers/fzf';
@@ -48,6 +48,14 @@ const parseByteSizeOption = (value: string): number => {
     throw new InvalidArgumentError('Expected a size such as 64k, 1m, or 65536.');
   }
   return bytes;
+};
+
+const parseTruncateMode = (value: string): CaptureMode => {
+  const mode = value.trim().toLowerCase();
+  if (mode !== 'head' && mode !== 'tail' && mode !== 'headtail') {
+    throw new InvalidArgumentError('Expected head, tail, or headtail.');
+  }
+  return mode;
 };
 
 /**
@@ -100,8 +108,9 @@ program
   .option('--no-cwd', 'Do not cd into the connection remote path first')
   .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
   .option('--no-stdin', 'Do not forward piped stdin to the remote command')
-  .option('--max-output <size>', 'Cap captured output per stream (e.g. 64k, 1m)', parseByteSizeOption)
-  .option('--tail', 'Keep the end instead of the start when output is truncated')
+  .option('--max-output <size>', 'Cap captured output per stream (default 16k in --json mode)', parseByteSizeOption)
+  .option('--truncate <mode>', 'Where to cut truncated output: head, tail, or headtail (default headtail in --json mode)', parseTruncateMode)
+  .option('--tail', 'Deprecated: keep the end when output is truncated (same as --truncate tail)')
   .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
   .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
@@ -114,6 +123,7 @@ program
     reuse?: boolean;
     stdin?: boolean;
     maxOutput?: number;
+    truncate?: CaptureMode;
     tail?: boolean;
     acceptNewHostKey?: boolean;
     strictHostKey?: boolean;
@@ -128,7 +138,7 @@ program
       reuse: options.reuse !== false,
       noStdin: options.stdin === false,
       maxOutputBytes: options.maxOutput,
-      outputMode: options.tail ? 'tail' : 'head',
+      outputMode: options.truncate ?? (options.tail ? 'tail' : undefined),
       hostKeyChecking: resolveHostKeyChecking(options),
       json: !!options.json,
     });

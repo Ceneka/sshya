@@ -26,9 +26,11 @@ export interface RunOptions {
   reuse?: boolean;
   /** First-contact host key policy. */
   hostKeyChecking?: HostKeyChecking;
-  /** Cap captured bytes per stream. Defaults to 64 KiB (SSHYA_MAX_OUTPUT). */
+  /** Cap captured stdout bytes. Defaults to 16 KiB (SSHYA_MAX_OUTPUT). */
   maxOutputBytes?: number;
-  /** Keep the start (default) or the end of a truncated stream. */
+  /** Cap captured stderr bytes. Defaults to min(maxOutputBytes, 16 KiB). */
+  stderrMaxOutputBytes?: number;
+  /** Keep the start, the end, or both ends of a truncated stream (default head). */
   outputMode?: CaptureMode;
   /** Bytes to send to the remote command's stdin. */
   stdin?: string | Buffer;
@@ -56,6 +58,8 @@ export interface RunResult {
   stderrLines: number;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  /** Capture mode that produced a truncation marker; absent when nothing was cut. */
+  truncation?: CaptureMode;
   timedOut: boolean;
   durationMs: number;
   /** Effective timeout in milliseconds; null when no timeout was set. */
@@ -109,6 +113,10 @@ export const executeSshCommand = (
 ): Promise<RunResult> => {
   const startedAt = Date.now();
   const maxOutputBytes = options.maxOutputBytes ?? defaultMaxOutputBytes();
+  const stderrMaxOutputBytes = Math.min(
+    options.stderrMaxOutputBytes ?? maxOutputBytes,
+    STDERR_CAPTURE_LIMIT,
+  );
   const outputMode = options.outputMode ?? 'head';
   const batchMode = options.batchMode ?? true;
   const reuse = reuseEnabled(options.reuse);
@@ -132,7 +140,7 @@ export const executeSshCommand = (
     ? new ByteCapture({ maxBytes: maxOutputBytes, mode: outputMode })
     : undefined;
   const stderrCapture = new ByteCapture({
-    maxBytes: Math.min(maxOutputBytes, STDERR_CAPTURE_LIMIT),
+    maxBytes: stderrMaxOutputBytes,
     mode: outputMode,
   });
 
@@ -256,6 +264,8 @@ export const executeSshCommand = (
 
       const stdout = stdoutCapture?.text() ?? '';
       const stderr = stderrCapture.text();
+      const stdoutTruncated = stdoutCapture?.truncated ?? false;
+      const stderrTruncated = stderrCapture.truncated;
       const ok = exitCode === 0 && !timedOut;
       const socketAfter = reuse ? controlSocketStat(connection) : undefined;
       const reused = socketBefore !== undefined
@@ -287,8 +297,9 @@ export const executeSshCommand = (
         stderrBytes: stderrCapture.totalBytes,
         stdoutLines: stdoutCapture?.lineCount ?? 0,
         stderrLines: stderrCapture.lineCount,
-        stdoutTruncated: stdoutCapture?.truncated ?? false,
-        stderrTruncated: stderrCapture.truncated,
+        stdoutTruncated,
+        stderrTruncated,
+        ...(stdoutTruncated || stderrTruncated ? { truncation: outputMode } : {}),
         timedOut,
         durationMs: Date.now() - startedAt,
         timeoutMs: timeoutMs ?? null,
@@ -372,6 +383,9 @@ export async function runConnectionPrompt(
     command,
     {
       ...options,
+      // JSON capture defaults to head+tail; a terminal run streams stdout and
+      // only keeps stderr, so its old head behavior is irrelevant there.
+      ...(options.outputMode === undefined ? { outputMode: json ? 'headtail' : 'head' } : {}),
       ...(forwardStdin ? { stdinStream: process.stdin } : {}),
     },
     mode,
