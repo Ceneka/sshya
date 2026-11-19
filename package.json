@@ -34,24 +34,23 @@
     "url": "https://github.com/Ceneka/sshya/issues"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/bun": "^1.4.2",
-    "typescript": "^7.0.2"
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "fuse.js": "^7.5.0",
+    "inquirer": "^12.11.1",
+    "typescript": "^7.0.2",
+    "zod": "^4.6.5"
   },
   "scripts": {
     "start": "bun run index.ts",
     "mcp": "bun run index.ts mcp",
     "build": "bun run scripts/build.ts",
+    "bench:startup": "bun run scripts/bench-startup.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "prepublishOnly": "bun run typecheck && bun test && bun run build"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
-    "chalk": "^5.6.2",
-    "commander": "^14.0.3",
-    "fuse.js": "^7.5.0",
-    "inquirer": "^12.11.1",
-    "zod": "^4.6.5"
   },
   "files": [
     "dist",

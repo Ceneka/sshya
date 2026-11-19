@@ -252,9 +252,11 @@ and `copy_file` downloads still write local files at the caller-chosen path.
 - **Runtime:** Node.js >= 20 for the published CLI (`dist/`); Bun >= 1.2 for
   development, tests, and building.
 - **Language:** TypeScript
-- **Build:** `bun build --target node` via `scripts/build.ts`; local modules are
-  bundled into two files and npm dependencies stay external.
-- **Dependencies:**
+- **Build:** `bun build --target node` via `scripts/build.ts`; local modules and
+  runtime dependencies are bundled and minified into content-hashed ESM chunks,
+  so the published package has no runtime `dependencies`.
+- **Dependencies:** bundled into `dist` at build time (listed in
+  `devDependencies`):
     - `commander`: For command-line argument parsing.
     - `inquirer`: For interactive prompts.
     - `chalk`: for terminal string styling.
@@ -294,9 +296,16 @@ bun test
 bun run build              # writes dist/index.js and dist/s.js for Node
 ```
 
-`bun run build` bundles local modules with `bun build --target node`, keeps npm
-dependencies external, and rewrites the two shebangs to `#!/usr/bin/env node`.
+`bun run build` bundles local modules and runtime dependencies with
+`bun build --target node`, minifies them, splits dynamic imports (`sshya mcp`)
+into a separate chunk, and rewrites the two shebangs to `#!/usr/bin/env node`.
+The package ships `dist/` only and has no runtime `dependencies`.
 `npm publish` runs typecheck, tests, and the build via `prepublishOnly`.
+
+For startup work, `bun run bench:startup` measures `--version`, `--help`,
+`list --json`, and a pooled `run` against a throwaway local sshd (10 runs per
+case, median). It uses an isolated `SSHYA_DB` and never touches `~/.sshya` or
+`~/.ssh`.
 
 ## Connecting
 

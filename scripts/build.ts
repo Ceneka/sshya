@@ -2,10 +2,24 @@
 /**
  * Build the published CLI: plain ESM JavaScript for Node >= 20.
  *
- * Local modules are bundled into two entry files so the tarball only ships
- * `dist`. Runtime dependencies stay external (`packages: "external"`): npm
- * installs them from `dependencies`, keeping the tarball small and letting
- * users benefit from normal dependency deduplication/security updates.
+ * Everything the CLI needs at runtime is bundled into `dist` (no `packages:
+ * "external"`), minified, and split into content-hashed chunks. This trades a
+ * bigger tarball for a much smaller process-start cost: Node no longer walks
+ * and parses the whole `node_modules` graph on every `sshya` invocation, which
+ * dominated agent loops (measured on one machine: ~365 ms -> ~94 ms for
+ * `--version`/`list --json`, ~385 ms -> ~116 ms for a pooled `run`).
+ *
+ * `splitting: true` is load-bearing. Code reachable only through a dynamic
+ * `import()` (currently `sshya mcp`, and any future lazy-loaded interactive
+ * module) lands in its own chunk and is parsed only when that command runs.
+ * Keep interactive-only dependencies behind dynamic imports in the source so
+ * they stay out of the eager `index.js` graph.
+ *
+ * The tarball grows from ~270 KiB to ~1.1 MiB raw (~61 KiB -> ~390 KiB
+ * gzipped), but the package has no runtime `dependencies`, so users install
+ * one tarball instead of the previous ~100-package tree. The cost is that
+ * dependency fixes only reach users through a new sshya release; there is no
+ * dedupe or package-manager patching. Revisit if that becomes a problem.
  *
  * Bun keeps the source shebang, so rewrite it to `node` afterwards. The source
  * files keep `#!/usr/bin/env bun` for direct `bun run index.ts` development.
@@ -26,7 +40,8 @@ const result = await Bun.build({
   outdir,
   target: 'node',
   format: 'esm',
-  packages: 'external',
+  splitting: true,
+  minify: true,
 });
 
 if (!result.success) {

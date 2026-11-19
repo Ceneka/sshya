@@ -11,7 +11,7 @@
 ## Architecture
 - **Runtime**: Node.js >= 20 for the published CLI; Bun >= 1.2 for development, tests, and builds
 - **Language**: TypeScript
-- **Packaging**: `scripts/build.ts` runs `bun build --target node` and writes `dist/index.js` / `dist/s.js` with a `#!/usr/bin/env node` shebang; local modules are bundled and dependencies stay external
+- **Packaging**: `scripts/build.ts` runs `bun build --target node` with dependency bundling, minification, and code splitting; writes `dist/index.js` / `dist/s.js` plus hashed chunks, rewrites shebangs to `#!/usr/bin/env node`, and publishes with no runtime `dependencies` (third-party code ships inside `dist`)
 
 ## Key Components
 
@@ -98,7 +98,9 @@
 8. **Diagnose**: `sshya doctor --probe --accept-new-host-key` → checks binaries, keys, agent, pool, and reachability
 
 ## Notable Implementation Details
-- `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints)
+- `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints). Ship the whole `dist/` directory: `build.ts` emits content-hashed chunks next to the entry files
+- The published artifact bundles every runtime dependency and has empty `dependencies`; the libraries stay in `devDependencies` for building and tests. Interactive/MCP-only code should stay behind dynamic `import()` so splitting keeps it out of the eager `index.js` graph (the MCP SDK chunk is ~300 KiB and is only loaded by `sshya mcp`)
+- Startup is part of the product for agent loops. Measure with `bun run bench:startup` (10 runs per case, median, isolated `SSHYA_DB` and a throwaway local sshd; nothing under `~/.sshya` or `~/.ssh` is touched)
 - `index.ts` must not read `import.meta.main` directly: Bun's bundler rewrites it into a Bun-only `require` shim that throws under Node. It reads the property dynamically and falls back to comparing `argv[1]` with `import.meta.url`
 - Runtime code must stay Node-compatible (no `Bun.*`, `bun:` imports, or `import.meta.dir`); run `bun run build` before `npm pack` / `npm publish`
 - Startup path: `index.ts` registers commander commands only; every action dynamically imports its command module. Heavy dependencies stay dynamic at their use site too — `inquirer` (prompts), `fuse.js` (fuzzy alias search), `zod` (`src/schema.ts` `loadConnectionSchema`), and the MCP SDK (`createMcpServer`). Bun's bundler hoists *static* external imports into the single `dist/index.js` even when the local module is only reached through `await import()`, so new heavy deps must be imported dynamically inside functions to stay off `--version`/`list`/`run`
