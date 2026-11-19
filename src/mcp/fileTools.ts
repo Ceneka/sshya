@@ -31,8 +31,12 @@ type ToolResult = {
   isError?: boolean;
 };
 
+/**
+ * File-tool responses are minified like every other MCP response: the model
+ * pays for whitespace too.
+ */
 const ok = (data: unknown, isError = false): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+  content: [{ type: 'text', text: JSON.stringify(data) ?? 'null' }],
   ...(isError ? { isError: true } : {}),
 });
 
@@ -491,7 +495,9 @@ export const registerFileTools = (server: McpServer, policy: McpPolicy): void =>
       }
 
       const maximum = maxMatches ?? 50;
-      const tokens = [`grep -rn${fixed ? 'F' : 'E'}${ignoreCase ? 'i' : ''}`, '-e', quoteShellArg(pattern)];
+      // -H keeps the file name for a single-file search path; without it GNU
+      // grep prints only `line:text` and callers cannot tell what matched.
+      const tokens = [`grep -Hrn${fixed ? 'F' : 'E'}${ignoreCase ? 'i' : ''}`, '-e', quoteShellArg(pattern)];
       if (glob) {
         tokens.push(quoteShellArg(`--include=${glob}`));
       }

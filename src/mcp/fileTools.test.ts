@@ -529,6 +529,32 @@ describe('replace_in_remote_file', () => {
   });
 });
 
+describe('file tool responses', () => {
+  test('are minified like the rest of the MCP surface', async () => {
+    useLocalShell();
+    const dir = workDir();
+    fs.writeFileSync(path.join(dir, 'mini.conf'), 'one\n');
+    seed('web', dir);
+
+    await withServer({}, async (client) => {
+      const read = await client.callTool({ name: 'read_remote_file', arguments: { alias: 'web', path: 'mini.conf' } });
+      const readText = (read.content as Array<{ text?: string }>)[0]?.text ?? '';
+      expect(readText).toBe(JSON.stringify(JSON.parse(readText)));
+      expect(readText).not.toContain('\n');
+
+      // Regressions for the same contract on the other file tools.
+      const stat = await client.callTool({ name: 'stat_remote', arguments: { alias: 'web', paths: ['mini.conf'] } });
+      const statText = (stat.content as Array<{ text?: string }>)[0]?.text ?? '';
+      expect(statText).toBe(JSON.stringify(JSON.parse(statText)));
+
+      const missing = await client.callTool({ name: 'read_remote_file', arguments: { alias: 'web', path: 'gone' } });
+      const missingText = (missing.content as Array<{ text?: string }>)[0]?.text ?? '';
+      expect(missingText).toBe(JSON.stringify(JSON.parse(missingText)));
+      expect(missing.isError).toBe(true);
+    });
+  });
+});
+
 describe('grep_remote', () => {
   test('returns compact file:line:text matches and honors glob and limits', async () => {
     useLocalShell();
@@ -575,6 +601,24 @@ describe('grep_remote', () => {
       });
       expect(none.isError).toBe(false);
       expect(none.data.matches).toEqual([]);
+    });
+  });
+
+  test('keeps the file name when the search path is a single file', async () => {
+    useLocalShell();
+    const dir = workDir();
+    fs.writeFileSync(path.join(dir, 'one.conf'), 'needle\n');
+    seed('web', dir);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<GrepResult>(client, 'grep_remote', {
+        alias: 'web',
+        pattern: 'needle',
+        path: 'one.conf',
+      });
+      expect(result.isError).toBe(false);
+      // GNU grep drops the file name for a lone file operand unless -H is set.
+      expect(result.data.matches).toEqual(['one.conf:1:needle']);
     });
   });
 
