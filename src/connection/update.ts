@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { connectionSchema, getConnectionByAlias, updateConnection, type Connection } from '../database';
+import { connectionSchema, getConnectionByAlias, LinkedConnectionError, updateConnection, type Connection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { selectAlias } from '../helpers/selectAlias';
 import { jsonEnabled, printJson } from '../output';
@@ -244,7 +244,7 @@ const saveUpdate = (
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (json) {
-      printJson({ ok: false, error: message });
+      printJson({ ok: false, error: message, ...(err instanceof LinkedConnectionError ? { errorKind: err.errorKind } : {}) });
     } else {
       console.error(chalk.red(message));
     }

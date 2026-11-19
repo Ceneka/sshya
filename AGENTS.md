@@ -7,6 +7,7 @@
 - **Remote Execution**: Run non-interactive commands over a stored connection (`run`)
 - **Import/Export**: JSON-based connection backup and restore (stdin/stdout supported)
 - **Agent Interface**: Non-interactive flags, `--json`, meaningful exit codes, and `sshya mcp`
+- **lazybackup link**: Optional pull-sync from a lazybackup instance, whose web UI is the source of truth for linked servers
 
 ## Architecture
 - **Runtime**: Node.js >= 20 for the published CLI; Bun >= 1.2 for development, tests, and builds
@@ -20,6 +21,14 @@
 - `upsertConnection()` for idempotent add-or-replace
 - `getDbPath()` honors `SSHYA_DB` so tests and agents can use an isolated store
 - Cache is keyed on file mtime/size so a long-running MCP server sees external edits
+
+### lazybackup link (`src/link/`)
+- `config.ts`: `link.json` (0600) next to the store (`dirname(getDbPath())`) with url, token, Cloudflare Access service token, `ttlSeconds` (default 300), and `keyMap` (default `/root/.ssh` → `~/.ssh`); `SSHYA_LINK_URL`/`SSHYA_LINK_TOKEN`/`SSHYA_CF_ACCESS_CLIENT_ID`/`SSHYA_CF_ACCESS_CLIENT_SECRET`/`SSHYA_LINK_TTL` override it. `link-state.json` records `lastSyncAt`/`lastAttemptAt`/`lastError`. `resolveLocalKeyPath()` maps a container key path to an existing local file (key map, as-is, then `~/.ssh/<basename>`)
+- `lazybackup.ts`: `GET /api/servers` (+ `/api/ssh-keys` only when a server uses `sshKeyId`) with Bearer + `CF-Access-Client-*` headers and `redirect: 'manual'`; errors are `LinkFetchError` with `link_unreachable`, `link_unauthorized`, `link_access_blocked` (redirect/HTML login wall), or `link_bad_response`. Secrets are never fetched: lazybackup redacts passwords and key contents
+- `sync.ts`: `planSync()` is pure. Match by `link.id`; alias = slugified name (duplicates get `-2`, ordered by id); adopt a local unlinked entry with the same alias and target; report a conflict for the same alias with another target; remove linked entries missing remotely; never touch unlinked entries. `key_path` follows the remote unless `link.localKey`. `syncLink()` writes via `replaceConnections()` only when something changed. `autoSync()` never throws: TTL-gated, 3 s timeout, 60 s backoff after a failure, `SSHYA_LINK_AUTO=0` disables it
+- Auto-sync runs in the CLI `preAction` hook for commands that read connections (not `link *`), in `s.ts`, on MCP `list_connections`, and on a 60 s unref'd timer in `runMcpServer()`
+- `Connection.link = { source: 'lazybackup', id, name?, auth?, localKey? }`. `updateConnection()` throws `LinkedConnectionError` (`errorKind: 'linked_connection'`) for alias/user/host/port changes; `removeConnection()` throws for linked entries. Changing `key_path` sets/clears `localKey`. CLI `remove`/`update`, `import` (skips), and MCP mutation tools surface it
+- Commands: `link set [url] --token|--token-stdin --cf-client-id --cf-client-secret --ttl --no-sync`, `link show`, `link unset [--purge]` (default detaches linked entries into local ones), `sync`
 
 ### SSH argv (`src/helpers/ssh.ts`)
 - Single source of truth for `-i`, `-p`, `-t`/`-T`, `BatchMode`, `ConnectTimeout`, keepalives, host-key policy, ControlMaster, and `cd <remote_path> && <command>`
@@ -53,6 +62,7 @@
 - `fzf`: In-process fzf picker that connects to the selected alias
 - `s`: Shortcut entrypoint that always runs `connect` (interactive picker or alias)
 - `mcp`: Starts the stdio MCP server (`--aliases a,b`, `--read-only`)
+- `link set|show|unset` / `sync`: lazybackup link (see above)
 
 ### Output (`src/output.ts`)
 - `jsonEnabled()` returns true for `--json` or `SSHYA_JSON=1`
@@ -72,7 +82,7 @@
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `read_remote_file`, `replace_in_remote_file`, `grep_remote`, `stat_remote`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
 - Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions, compact-response details, and the active policy)
 - Responses are compact and minified: `ok()` uses `JSON.stringify` and `compactRunResult()` omits echoed input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero counters, and false flags while always keeping `ok`, `exitCode`, and failure `errorKind`/`hint`. `run_command`/`run_on_many` accept `verbose: true` for the full shape.
-- `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
+- `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`/`linked`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
 - `run_on_many` supports `only: 'all' | 'failures'`, `match` (regex; matching stdout lines only), and `stdin`/`tty`/`reuse` parity with `run_command`; the summary `{total, succeeded, failed}` always covers every requested host.
 - Errors are actionable: unknown aliases return `errorKind: 'alias_not_found'` plus up to three `suggestions`; sudo failures classify as `tty` (`tty: true` / `sudo -n`) or `sudo_password` (NOPASSWD / `sudo -n`). Every `failResult` carries an `errorKind`.
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped at 8 KiB stdout + 4 KiB stderr (`headtail`), `cwd=true`. Keep tool descriptions to one short sentence and param descriptions to a few words; put details in `sshya://guide` so `tools/list` stays under ~1,800 tokens.

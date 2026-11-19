@@ -3,6 +3,7 @@
 import { connectConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { enableEscapeExit } from './src/helpers/escExit';
+import { autoSyncForCli } from './src/link/commands';
 
 if (process.stdin.isTTY && process.stdout.isTTY) {
   enableEscapeExit();
@@ -20,5 +21,6 @@ if (arg === '-h' || arg === '--help') {
 }
 
 initDB();
+await autoSyncForCli(false);
 
 await connectConnectionPrompt(arg);

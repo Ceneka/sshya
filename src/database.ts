@@ -33,7 +33,55 @@ export interface Connection {
    * restriction: `run_command` remains arbitrary.
    */
   readonly?: boolean;
+  /**
+   * Present when the connection is managed by a linked lazybackup instance
+   * (see `src/link/`). The web UI is the source of truth for alias, user, host,
+   * and port; only local overlay fields (`key_path`, `remote_path`, `readonly`,
+   * `lastUsed`) may be changed here.
+   */
+  link?: ConnectionLink;
 }
+
+export interface ConnectionLink {
+  source: 'lazybackup';
+  /** lazybackup `servers.id`. */
+  id: string;
+  /** Display name in lazybackup (the alias is derived from it). */
+  name?: string;
+  /** lazybackup auth type; password servers cannot run in BatchMode. */
+  auth?: 'key' | 'password';
+  /** True once the key path was overridden locally; sync stops touching it. */
+  localKey?: boolean;
+}
+
+/** Thrown when a local mutation targets a field owned by the linked store. */
+export class LinkedConnectionError extends Error {
+  readonly errorKind = 'linked_connection';
+  constructor(alias: string, action: string) {
+    super(
+      `Connection "${alias}" is managed by lazybackup; ${action} must be done in the lazybackup web UI. ` +
+        'Locally you can only change key_path, remote_path, and readonly.',
+    );
+    this.name = 'LinkedConnectionError';
+  }
+}
+
+const normalizeLink = (link: unknown): ConnectionLink | undefined => {
+  if (!link || typeof link !== 'object') {
+    return undefined;
+  }
+  const value = link as Partial<ConnectionLink>;
+  if (value.source !== 'lazybackup' || typeof value.id !== 'string' || !value.id) {
+    return undefined;
+  }
+  return {
+    source: 'lazybackup',
+    id: value.id,
+    ...(typeof value.name === 'string' && value.name ? { name: value.name } : {}),
+    ...(value.auth === 'key' || value.auth === 'password' ? { auth: value.auth } : {}),
+    ...(value.localKey === true ? { localKey: true } : {}),
+  };
+};
 
 export const connectionSchema = z.object({
   alias: z.string().min(1),
@@ -89,6 +137,7 @@ const normalizeConnection = (connection: Connection): Connection => {
     port: normalizedPort,
     remote_path: normalizedRemotePath,
     readonly: connection.readonly === true ? true : undefined,
+    link: normalizeLink(connection.link),
   };
 };
 
@@ -214,6 +263,10 @@ export const getConnectionByAlias = (alias: string) => {
 
 export const removeConnection = (alias: string) => {
   const connections = readDB();
+  const target = connections.find(c => c.alias === alias);
+  if (target?.link) {
+    throw new LinkedConnectionError(alias, 'removal');
+  }
   const newConnections = connections.filter(c => c.alias !== alias);
   if (newConnections.length === connections.length) {
     return false;
@@ -246,11 +299,32 @@ export const updateConnection = (
     throw new Error(`Connection with alias "${normalizedAlias}" already exists.`);
   }
 
+  const nextKeyPath = expandHomePath(normalizeOptionalString(newKeyPath));
+  const nextPort = normalizeOptionalString(newPort);
+  if (connection.link) {
+    if (
+      normalizedAlias !== connection.alias ||
+      newUser.trim() !== connection.user ||
+      newHost.trim() !== connection.host ||
+      nextPort !== connection.port
+    ) {
+      throw new LinkedConnectionError(connection.alias, 'changes to alias, user, host, or port');
+    }
+    if (nextKeyPath !== connection.key_path) {
+      // An explicit local key wins over the synced one; clearing it hands the
+      // key back to the next sync.
+      connection.link = { ...connection.link, localKey: nextKeyPath ? true : undefined };
+      if (!connection.link.localKey) {
+        delete connection.link.localKey;
+      }
+    }
+  }
+
   connection.alias = normalizedAlias;
   connection.user = newUser.trim();
   connection.host = newHost.trim();
-  connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
-  connection.port = normalizeOptionalString(newPort);
+  connection.key_path = nextKeyPath;
+  connection.port = nextPort;
   connection.remote_path = normalizeOptionalString(newRemotePath);
   if (newReadonly !== undefined) {
     connection.readonly = newReadonly === true ? true : undefined;
@@ -284,6 +358,14 @@ export const upsertConnection = (
     return getConnectionByAlias(data.alias)!;
   }
   return addConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path, data.readonly);
+};
+
+/**
+ * Replace the whole store. Used by link sync, which computes the next state
+ * from the current one plus the remote list in a single pass.
+ */
+export const replaceConnections = (connections: Connection[]) => {
+  writeDB(connections.map(normalizeConnection));
 };
 
 export const recordConnectionUsage = (alias: string) => {

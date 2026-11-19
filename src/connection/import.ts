@@ -139,6 +139,12 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
         for (const parsedConn of valid) {
             const existingConn = getConnectionByAlias(parsedConn.alias);
 
+            if (existingConn?.link) {
+                summary.skipped++;
+                summary.errors.push(`Skipped "${parsedConn.alias}": it is managed by lazybackup.`);
+                continue;
+            }
+
             if (existingConn) {
                 let action: 'Skip' | 'Overwrite' = 'Skip';
 
