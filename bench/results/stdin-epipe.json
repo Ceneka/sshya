@@ -1,0 +1,54 @@
+{
+  "description": "Child stdin write vs an ssh process that exits without reading.",
+  "payloadBytes": 262144,
+  "cases": [
+    {
+      "mode": "write",
+      "drainStdin": false,
+      "bytes": 262144,
+      "exitCode": 1,
+      "crashed": true,
+      "epipe": true,
+      "toolReturned": true,
+      "cleanExit": true,
+      "elapsedMs": 132,
+      "stderrTail": "      at emitErrorNT (internal:streams/destroy:88:12) |       at emitErrorCloseNT (internal:streams/destroy:69:14) |  | Bun v1.4.4 (Linux x64)"
+    },
+    {
+      "mode": "run-stdin",
+      "drainStdin": false,
+      "bytes": 262144,
+      "exitCode": 1,
+      "crashed": true,
+      "epipe": true,
+      "toolReturned": true,
+      "cleanExit": true,
+      "elapsedMs": 132,
+      "stderrTail": "      at emitErrorNT (internal:streams/destroy:88:12) |       at emitErrorCloseNT (internal:streams/destroy:69:14) |  | Bun v1.4.4 (Linux x64)"
+    },
+    {
+      "mode": "write",
+      "drainStdin": true,
+      "bytes": 262144,
+      "exitCode": 0,
+      "crashed": false,
+      "epipe": false,
+      "toolReturned": true,
+      "cleanExit": true,
+      "elapsedMs": 133,
+      "stderrTail": ""
+    },
+    {
+      "mode": "run-stdin",
+      "drainStdin": true,
+      "bytes": 262144,
+      "exitCode": 0,
+      "crashed": false,
+      "epipe": false,
+      "toolReturned": true,
+      "cleanExit": true,
+      "elapsedMs": 135,
+      "stderrTail": ""
+    }
+  ]
+}

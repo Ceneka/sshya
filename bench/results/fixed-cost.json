@@ -1,0 +1,317 @@
+{
+  "tokenizer": "gpt-tokenizer 3.x o200k_base (cl100k_base for reference)",
+  "server": {
+    "name": "sshya",
+    "version": "0.6.0"
+  },
+  "capabilities": {
+    "resources": {
+      "listChanged": true
+    },
+    "tools": {
+      "listChanged": true
+    }
+  },
+  "toolCount": 12,
+  "instructions": {
+    "chars": 727,
+    "tokens": 146,
+    "tokensCl100k": 146,
+    "approxTokens": 182,
+    "text": "Manage and use stored SSH connections. Call list_connections to discover aliases before running commands. run_command is a one-shot non-interactive shell; state does not persist between calls. Set cwd or include cd in the command. Connections are pooled, so repeated calls reuse a warm SSH session; pass reuse=false to force a fresh one. Output is capped and reports truncation; use maxOutputBytes or tail for large logs. On failure read errorKind and hint before retrying; unknown host keys are trusted once by default (acceptNewHostKey=false disables that). Use run_on_many for fleet checks, copy_file for transfers, and write_remote_file for small config writes. Read the sshya://guide resource for conventions and examples."
+  },
+  "toolsList": {
+    "chars": 11566,
+    "tokens": 2592,
+    "tokensCl100k": 2510,
+    "approxTokens": 2892,
+    "rawWireChars": 11600,
+    "rows": [
+      {
+        "name": "run_command",
+        "titleChars": 22,
+        "descriptionChars": 737,
+        "descriptionTokens": 160,
+        "schemaChars": 1205,
+        "schemaTokens": 277,
+        "totalChars": 2069,
+        "totalTokens": 464,
+        "paramCount": 10,
+        "paramDescriptionTokens": 104
+      },
+      {
+        "name": "write_remote_file",
+        "titleChars": 19,
+        "descriptionChars": 421,
+        "descriptionTokens": 92,
+        "schemaChars": 1075,
+        "schemaTokens": 266,
+        "totalChars": 1626,
+        "totalTokens": 385,
+        "paramCount": 9,
+        "paramDescriptionTokens": 91
+      },
+      {
+        "name": "run_on_many",
+        "titleChars": 36,
+        "descriptionChars": 298,
+        "descriptionTokens": 64,
+        "schemaChars": 1086,
+        "schemaTokens": 252,
+        "totalChars": 1525,
+        "totalTokens": 345,
+        "paramCount": 9,
+        "paramDescriptionTokens": 70
+      },
+      {
+        "name": "copy_file",
+        "titleChars": 20,
+        "descriptionChars": 205,
+        "descriptionTokens": 40,
+        "schemaChars": 795,
+        "schemaTokens": 182,
+        "totalChars": 1123,
+        "totalTokens": 249,
+        "paramCount": 9,
+        "paramDescriptionTokens": 38
+      },
+      {
+        "name": "add_connection",
+        "titleChars": 21,
+        "descriptionChars": 96,
+        "descriptionTokens": 21,
+        "schemaChars": 696,
+        "schemaTokens": 161,
+        "totalChars": 921,
+        "totalTokens": 209,
+        "paramCount": 7,
+        "paramDescriptionTokens": 43
+      },
+      {
+        "name": "test_connection",
+        "titleChars": 22,
+        "descriptionChars": 223,
+        "descriptionTokens": 51,
+        "schemaChars": 547,
+        "schemaTokens": 124,
+        "totalChars": 937,
+        "totalTokens": 209,
+        "paramCount": 4,
+        "paramDescriptionTokens": 37
+      },
+      {
+        "name": "import_connections",
+        "titleChars": 22,
+        "descriptionChars": 145,
+        "descriptionTokens": 25,
+        "schemaChars": 563,
+        "schemaTokens": 130,
+        "totalChars": 842,
+        "totalTokens": 180,
+        "paramCount": 2,
+        "paramDescriptionTokens": 9
+      },
+      {
+        "name": "update_connection",
+        "titleChars": 24,
+        "descriptionChars": 131,
+        "descriptionTokens": 26,
+        "schemaChars": 413,
+        "schemaTokens": 101,
+        "totalChars": 679,
+        "totalTokens": 153,
+        "paramCount": 7,
+        "paramDescriptionTokens": 10
+      },
+      {
+        "name": "print_ssh_command",
+        "titleChars": 20,
+        "descriptionChars": 183,
+        "descriptionTokens": 35,
+        "schemaChars": 305,
+        "schemaTokens": 66,
+        "totalChars": 655,
+        "totalTokens": 137,
+        "paramCount": 2,
+        "paramDescriptionTokens": 15
+      },
+      {
+        "name": "get_connection",
+        "titleChars": 21,
+        "descriptionChars": 49,
+        "descriptionTokens": 10,
+        "schemaChars": 184,
+        "schemaTokens": 44,
+        "totalChars": 398,
+        "totalTokens": 88,
+        "paramCount": 1,
+        "paramDescriptionTokens": 3
+      },
+      {
+        "name": "remove_connection",
+        "titleChars": 24,
+        "descriptionChars": 44,
+        "descriptionTokens": 8,
+        "schemaChars": 184,
+        "schemaTokens": 44,
+        "totalChars": 402,
+        "totalTokens": 86,
+        "paramCount": 1,
+        "paramDescriptionTokens": 3
+      },
+      {
+        "name": "list_connections",
+        "titleChars": 20,
+        "descriptionChars": 115,
+        "descriptionTokens": 26,
+        "schemaChars": 85,
+        "schemaTokens": 24,
+        "totalChars": 366,
+        "totalTokens": 83,
+        "paramCount": 0,
+        "paramDescriptionTokens": 0
+      }
+    ]
+  },
+  "resourcesList": {
+    "chars": 344,
+    "tokens": 76,
+    "tokensCl100k": 75,
+    "approxTokens": 86,
+    "rawWireChars": 378,
+    "resources": [
+      {
+        "name": "connections",
+        "title": "SSH connections",
+        "uri": "sshya://connections",
+        "description": "All stored SSH connections as JSON.",
+        "mimeType": "application/json"
+      },
+      {
+        "name": "guide",
+        "title": "Using sshya from an agent",
+        "uri": "sshya://guide",
+        "description": "Conventions and recipes for calling sshya over MCP.",
+        "mimeType": "text/markdown"
+      }
+    ]
+  },
+  "guide": {
+    "chars": 1734,
+    "tokens": 454,
+    "tokensCl100k": 451,
+    "approxTokens": 434,
+    "wrappedChars": 1833,
+    "rawWireChars": 1867
+  },
+  "alwaysOn": {
+    "chars": 12293,
+    "tokens": 2738,
+    "approxTokens": 3074
+  },
+  "withGuide": {
+    "chars": 14027,
+    "tokens": 3192,
+    "approxTokens": 3507
+  },
+  "protocolEnvelope": {
+    "initializeResponseChars": 938
+  },
+  "redundancy": {
+    "repeatedSentences": [
+      {
+        "sentence": "trust a previously unknown host key on first contact (default true)",
+        "count": 3,
+        "wastedTokens": 26
+      },
+      {
+        "sentence": "reuse a pooled connection when available (default true)",
+        "count": 3,
+        "wastedTokens": 20
+      },
+      {
+        "sentence": "abort after this many milliseconds (default 120000)",
+        "count": 2,
+        "wastedTokens": 11
+      }
+    ],
+    "wastedTokens": 57,
+    "shingleSize": 10,
+    "repeatedShingles": 4,
+    "duplicatedRuns": 6,
+    "repeatedParamDescriptions": [
+      {
+        "description": "Trust a previously unknown host key on first contact (default true)",
+        "count": 3,
+        "tokensEach": 13,
+        "wastedTokens": 26
+      },
+      {
+        "description": "Reuse a pooled connection when available (default true)",
+        "count": 3,
+        "tokensEach": 10,
+        "wastedTokens": 20
+      },
+      {
+        "description": "Exact connection alias",
+        "count": 7,
+        "tokensEach": 3,
+        "wastedTokens": 18
+      },
+      {
+        "description": "Abort after this many milliseconds (default 120000)",
+        "count": 2,
+        "tokensEach": 11,
+        "wastedTokens": 11
+      }
+    ],
+    "boilerplate": {
+      "titles": 50,
+      "schemaDialect": {
+        "occurrences": 12,
+        "tokens": 132
+      },
+      "executionTaskSupport": {
+        "occurrences": 12,
+        "tokens": 84
+      },
+      "safeIntegerMaximums": {
+        "occurrences": 5,
+        "tokens": 30
+      },
+      "annotations": {
+        "occurrences": 5,
+        "tokens": 42
+      },
+      "parameterDescriptions": {
+        "tokens": 423
+      },
+      "descriptionTokens": 558,
+      "schemaTokens": 1671
+    }
+  },
+  "projection": {
+    "note": "Projection only: tools/list JSON transformed in memory; no product change.",
+    "currentToolsList": {
+      "chars": 11566,
+      "tokens": 2592
+    },
+    "slim40": {
+      "chars": 8822,
+      "tokens": 2025
+    },
+    "slim60": {
+      "chars": 9252,
+      "tokens": 2111
+    },
+    "leanNoParamDescriptions": {
+      "chars": 6366,
+      "tokens": 1539
+    },
+    "instructionAndToolTotalCurrent": 2738,
+    "instructionAndToolTotalSlim40": 2171,
+    "instructionAndToolTotalLean": 1685,
+    "savingsTokens": 567,
+    "leanSavingsTokens": 1053
+  }
+}
