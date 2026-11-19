@@ -1,0 +1,117 @@
+{
+  "environment": {
+    "platform": "linux",
+    "node": "v26.3.0",
+    "sshd": "127.0.0.1:46491",
+    "iterations": 20,
+    "note": "real local sshd; CLI wall time includes Node startup"
+  },
+  "cliAndMcp": [
+    {
+      "step": "CLI run --json cold (first ControlMaster)",
+      "n": 5,
+      "medianMs": 325.05,
+      "p95Ms": 343.8,
+      "note": "last in-process durationMs=138"
+    },
+    {
+      "step": "CLI run --json warm pooled",
+      "n": 20,
+      "medianMs": 181.22,
+      "p95Ms": 197.66,
+      "note": "includes ~160 ms Node startup"
+    },
+    {
+      "step": "CLI run --json warm, 4 KiB stdout",
+      "n": 10,
+      "medianMs": 163.95,
+      "p95Ms": 170.68
+    },
+    {
+      "step": "MCP run_command true (warm pool)",
+      "n": 30,
+      "medianMs": 8.86,
+      "p95Ms": 9.24
+    },
+    {
+      "step": "MCP run_command 4 KiB stdout",
+      "n": 15,
+      "medianMs": 9.83,
+      "p95Ms": 10.23
+    },
+    {
+      "step": "MCP read_remote_file (120-line file)",
+      "n": 15,
+      "medianMs": 13.01,
+      "p95Ms": 76.96
+    },
+    {
+      "step": "MCP read_remote_file (200k-line file)",
+      "n": 10,
+      "medianMs": 32.64,
+      "p95Ms": 36.41
+    },
+    {
+      "step": "MCP stat_remote (1 path)",
+      "n": 15,
+      "medianMs": 10.36,
+      "p95Ms": 10.75
+    },
+    {
+      "step": "MCP stat_remote (10 paths)",
+      "n": 10,
+      "medianMs": 27.54,
+      "p95Ms": 37.95
+    },
+    {
+      "step": "MCP grep_remote (single file)",
+      "n": 10,
+      "medianMs": 10.34,
+      "p95Ms": 11.68
+    },
+    {
+      "step": "MCP replace_in_remote_file",
+      "n": 10,
+      "medianMs": 37.73,
+      "p95Ms": 111.11
+    },
+    {
+      "step": "MCP write_remote_file atomic=true",
+      "n": 10,
+      "medianMs": 16.14,
+      "p95Ms": 17.34
+    },
+    {
+      "step": "MCP list_connections (no ssh)",
+      "n": 20,
+      "medianMs": 0.15,
+      "p95Ms": 0.25
+    }
+  ],
+  "execPerCall": [
+    {
+      "step": "run_command true",
+      "execPerCall": 2
+    },
+    {
+      "step": "read_remote_file",
+      "execPerCall": 7
+    },
+    {
+      "step": "stat_remote (1 path)",
+      "execPerCall": 3
+    },
+    {
+      "step": "stat_remote (10 paths)",
+      "execPerCall": 12
+    },
+    {
+      "step": "replace_in_remote_file",
+      "execPerCall": 8
+    },
+    {
+      "step": "write_remote_file atomic",
+      "execPerCall": 9
+    }
+  ]
+}

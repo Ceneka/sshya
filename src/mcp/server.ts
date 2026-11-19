@@ -9,6 +9,7 @@ import {
   getConnections,
   initDB,
   recordConnectionUsage,
+  recordConnectionsUsage,
   removeConnection,
   updateConnection,
   upsertConnection,
@@ -480,6 +481,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
 
       const results = new Array<RunLike>(uniqueAliases.length);
+      const usedAliases = new Set<string>();
       let cursor = 0;
       let stop = false;
 
@@ -505,7 +507,9 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             continue;
           }
 
-          recordConnectionUsage(alias);
+          // Collect first, then write once: a per-host write would rewrite the
+          // whole store up to 50 times per call.
+          usedAliases.add(alias);
           const result = await executeSshCommand(connection, command, {
             batchMode: true,
             tty: tty === true,
@@ -527,6 +531,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const workers = Math.min(concurrency ?? 4, uniqueAliases.length);
       await Promise.all(Array.from({ length: workers }, worker));
+      recordConnectionsUsage(usedAliases);
 
       // Workers always fill every slot unless failFast stopped them.
       for (let index = 0; index < results.length; index += 1) {

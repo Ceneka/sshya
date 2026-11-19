@@ -26,6 +26,7 @@ same tables that appear in the report.
 | `03-latency.ts` | Process-spawn floor vs `executeSshCommand` vs MCP round trip; 10-host fan-out; 64 KiB capture at the 8 KiB head+tail default |
 | `04-ergonomics.ts` | Realistic agent tasks with the final tool mix (structured file tools included), compared against the original 0.6.0 totals from `REPORT.md` §4 |
 | `05-stdin-epipe.ts` | Child-process reproduction of unhandled EPIPE when ssh exits without draining stdin |
+| `06-hot-path.ts` | Per-call wall time for `sshya run` and each MCP tool against a real local sshd with a warm ControlMaster, plus the deterministic number of `execve` calls per call (client and remote processes) |
 
 ## Method
 
@@ -52,5 +53,12 @@ same tables that appear in the report.
   show what a different response shape would cost; they are labeled as
   projections in the report.
 - **No sshd on 127.0.0.1:22** in this environment, so real SSH handshake and
-  ControlMaster reuse latency were not measured. `03-latency.ts` measures the
-  local overhead on top of the fake ssh and says so explicitly.
+  ControlMaster reuse latency were not measured by scripts 01–05. `03-latency.ts`
+  measures the local overhead on top of the fake ssh and says so explicitly.
+- **Real local sshd for the hot path.** `06-hot-path.ts` starts the same
+  throwaway sshd fixture as the e2e suite (`/usr/sbin/sshd` on 127.0.0.1 with
+  temporary keys, HOME, store, and control-socket directory), so it measures
+  real ControlMaster attach cost without touching a remote host or
+  `~/.sshya`/`~/.ssh`. It needs a prior `bun run build` (it drives `dist/`).
+  Its second table uses the fake exec ssh under `strace`, which makes the
+  per-call process count deterministic.

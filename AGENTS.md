@@ -19,7 +19,8 @@
 - `Connection` interface with id, alias, user, host, key_path, port, remote_path, lastUsed, and optional `readonly`
 - `upsertConnection()` for idempotent add-or-replace
 - `getDbPath()` honors `SSHYA_DB` so tests and agents can use an isolated store
-- Cache is keyed on file mtime/size so a long-running MCP server sees external edits
+- Cache is keyed on file mtime/size so a long-running MCP server sees external edits. The cache stays valid after sshya's own writes (they re-stat the file), so `recordConnectionUsage` does not force a re-read per call
+- `recordConnectionsUsage(aliases)` updates several aliases with one store write; `run_on_many` uses it instead of one write per host
 
 ### SSH argv (`src/helpers/ssh.ts`)
 - Single source of truth for `-i`, `-p`, `-t`/`-T`, `BatchMode`, `ConnectTimeout`, keepalives, host-key policy, ControlMaster, and `cd <remote_path> && <command>`
@@ -61,11 +62,13 @@
 
 ### Remote file tools (`src/mcp/fileTools.ts`)
 - `registerFileTools(server, policy)` adds `read_remote_file`, `grep_remote`, and `stat_remote`; `replace_in_remote_file` is only registered outside read-only mode
-- `read_remote_file` does one round trip: existence/directory/binary guards, `awk 'END { print NR }'` for `totalLines`, and `sed -n 'a,bp'` piped through `dd` so the transfer is byte-capped. Lines are numbered `${line}\t${text}` by default
+- `read_remote_file` does one round trip: existence/directory/binary guards, `sed -n '$='` for `totalLines`, and `sed -n 'a,bp'` piped through `dd` so the transfer is byte-capped. Lines are numbered `${line}\t${text}` by default
 - `replace_in_remote_file` reads the file with a `cksum` fingerprint plus GNU/BSD `stat` mode/uid/gid, counts non-overlapping `oldText` matches locally, and fails with `errorKind: 'match_count'` (plus actual count and matching line numbers) unless `expectedCount` matches. It uploads through stdin to `.<base>.sshya-tmp.<random>` in the same directory, verifies the byte count, restores mode/owner where possible, then `mv`s it into place. A changed `cksum` fails with `errorKind: 'conflict'`; files over 2 MiB are refused
 - `grep_remote` runs `grep -rnE`/`-rnF` with an optional `--include` glob and returns compact `file:line:text` matches; a leading `./` is stripped
-- `stat_remote` reports size/mode/mtime/type for up to 50 paths, trying GNU `stat -c` then BSD `stat -f`
-- `buildAtomicWriteCommand()` builds the temp-file-plus-`mv` script used by both `replace_in_remote_file` and `write_remote_file` with `atomic: true`; mode/owner are copied from the existing file where the platform allows it
+- `stat_remote` reports size/mode/mtime/type for up to 50 paths. It uses one `stat -c`/`stat -f` per path (three separate invocations were the dominant cost at 10+ paths), with missing paths reported as `type: "missing"`
+- `buildAtomicWriteCommand()` builds the temp-file-plus-`mv` script used by both `replace_in_remote_file` and `write_remote_file` with `atomic: true`; mode/owner come from one `stat` and are copied from the existing file where the platform allows it
+- Remote scripts must not rely on word splitting (`set -- $var`): the remote login shell can be zsh, which does not split unquoted expansions. Parse multi-field output with `${var%% *}` / `${var#* }`
+- The binary guard reads the first 8 KiB with `od -An -v -tx1 -N 8192` (GNU, BSD, and BusyBox) instead of `dd | od`, saving a process per read
 
 ### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`, `src/mcp/fileTools.ts`)
 - `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
