@@ -19,6 +19,7 @@ import { findAliasSuggestions } from '../helpers/selectAlias';
 import { executeCopy } from '../connection/copy';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
+import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
 type ToolResult = {
@@ -581,7 +582,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'write_remote_file',
       {
-        description: 'Write a remote file; not atomic.',
+        description: 'Write a remote file (atomic=true: temp + rename).',
         inputSchema: {
           alias: z.string().min(1),
           path: z.string().min(1),
@@ -591,10 +592,11 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           createParents: z.boolean().optional(),
           mode: z.string().regex(/^[0-7]{3,4}$/).optional(),
           timeoutMs: z.number().int().positive().optional(),
+          atomic: z.boolean().optional(),
           acceptNewHostKey: z.boolean().optional(),
         },
       },
-      async ({ alias, path: remotePath, content, encoding, append, createParents, mode, timeoutMs, acceptNewHostKey }) => {
+      async ({ alias, path: remotePath, content, encoding, append, createParents, mode, atomic, timeoutMs, acceptNewHostKey }) => {
         if (!policy.isAliasAllowed(alias)) {
           return aliasDenial(policy, alias);
         }
@@ -625,9 +627,20 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           commands.push(`mkdir -p -- ${quoteRemotePath(parent)}`);
         }
 
-        commands.push(`cat ${append ? '>>' : '>'} ${quotedPath}`);
-        if (mode) {
-          commands.push(`chmod ${mode} -- ${quotedPath}`);
+        if (atomic === true) {
+          commands.push(buildAtomicWriteCommand({
+            target: remotePath,
+            append,
+            mode,
+            // With append the final size depends on the existing file, so only
+            // verify the byte count for a full replacement.
+            expectedBytes: append ? undefined : data.byteLength,
+          }));
+        } else {
+          commands.push(`cat ${append ? '>>' : '>'} ${quotedPath}`);
+          if (mode) {
+            commands.push(`chmod ${mode} -- ${quotedPath}`);
+          }
         }
 
         recordConnectionUsage(alias);
@@ -649,6 +662,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             ...(result.ok ? { bytesWritten: data.byteLength } : {}),
             ...(encoding === 'base64' ? { encoding } : {}),
             ...(append === true ? { appended: true } : {}),
+            ...(atomic === true ? { atomic: true } : {}),
             ...(result.reused ? { reused: true } : {}),
             ...(result.durationMs > 5000 ? { durationMs: result.durationMs } : {}),
             ...(result.ok
@@ -837,6 +851,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     );
   }
 
+  registerFileTools(server, policy);
+
   server.registerResource(
     'connections',
     'sshya://connections',
@@ -879,8 +895,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '',
           '## Tools',
           policy.readOnly
-            ? '- Available: list_connections, get_connection, test_connection, run_command, run_on_many, copy_file (download only), and print_ssh_command.'
-            : '- Available: list_connections, get_connection, add_connection, update_connection, remove_connection, import_connections, test_connection, run_command, run_on_many, write_remote_file, copy_file, and print_ssh_command.',
+            ? '- Available: list_connections, get_connection, test_connection, run_command, run_on_many, read_remote_file, grep_remote, stat_remote, copy_file (download only), and print_ssh_command.'
+            : '- Available: list_connections, get_connection, add_connection, update_connection, remove_connection, import_connections, test_connection, run_command, run_on_many, read_remote_file, replace_in_remote_file, grep_remote, stat_remote, write_remote_file, copy_file, and print_ssh_command.',
           '',
           '## Mental model',
           '- Each `run_command` is an independent, non-interactive shell. There is no live shell between calls: `cd` and exports do not persist.',
@@ -899,15 +915,18 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which part survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, and `connection_readonly`.',
           '- An unknown alias returns `errorKind: "alias_not_found"` with up to three `suggestions`; fix the alias and retry, never execute against a suggestion automatically.',
           '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` when sudo needs a terminal. Prefer passwordless `sudo -n` for agents.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
           '',
           '## Files',
+          '- `read_remote_file` returns a numbered line range (`offset`/`limit`, byte-capped) plus `totalLines`; prefer it over `cat` for large files.',
+          '- `replace_in_remote_file` replaces an exact string, verifies `expectedCount`, and writes atomically. It refuses files over 2 MiB and returns `errorKind: "match_count"` or `"conflict"` instead of guessing.',
+          '- `grep_remote` returns `file:line:text` matches; `stat_remote` returns size/mode/mtime/type. Both avoid parsing `ls -l` in the model.',
           '- `copy_file` uses scp for uploads/downloads.',
-          '- `write_remote_file` pipes bytes through SSH; it is convenient for configs and small binary payloads but is not atomic.',
-          '- A connection with `readonly: true` refuses write_remote_file and copy_file uploads. The flag does not restrict run_command.',
+          '- `write_remote_file` pipes bytes through SSH; pass `atomic: true` to write a temp file and rename it into place.',
+          '- A connection with `readonly: true` refuses replace_in_remote_file, write_remote_file, and copy_file uploads. The flag does not restrict run_command.',
           '',
           '## Safety',
           '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',

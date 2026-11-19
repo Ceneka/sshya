@@ -59,9 +59,17 @@
 - Human messages use chalk; JSON mode never mixes styling into the payload
 - Errors go to stderr; machine-readable error objects are emitted in JSON mode
 
-### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`)
+### Remote file tools (`src/mcp/fileTools.ts`)
+- `registerFileTools(server, policy)` adds `read_remote_file`, `grep_remote`, and `stat_remote`; `replace_in_remote_file` is only registered outside read-only mode
+- `read_remote_file` does one round trip: existence/directory/binary guards, `awk 'END { print NR }'` for `totalLines`, and `sed -n 'a,bp'` piped through `dd` so the transfer is byte-capped. Lines are numbered `${line}\t${text}` by default
+- `replace_in_remote_file` reads the file with a `cksum` fingerprint plus GNU/BSD `stat` mode/uid/gid, counts non-overlapping `oldText` matches locally, and fails with `errorKind: 'match_count'` (plus actual count and matching line numbers) unless `expectedCount` matches. It uploads through stdin to `.<base>.sshya-tmp.$$` in the same directory, verifies the byte count, restores mode/owner where possible, then `mv`s it into place. A changed `cksum` fails with `errorKind: 'conflict'`; files over 2 MiB are refused
+- `grep_remote` runs `grep -rnE`/`-rnF` with an optional `--include` glob and returns compact `file:line:text` matches; a leading `./` is stripped
+- `stat_remote` reports size/mode/mtime/type for up to 50 paths, trying GNU `stat -c` then BSD `stat -f`
+- `buildAtomicWriteCommand()` builds the temp-file-plus-`mv` script used by both `replace_in_remote_file` and `write_remote_file` with `atomic: true`; mode/owner are copied from the existing file where the platform allows it
+
+### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`, `src/mcp/fileTools.ts`)
 - `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
-- Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
+- Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `read_remote_file`, `replace_in_remote_file`, `grep_remote`, `stat_remote`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
 - Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions, compact-response details, and the active policy)
 - Responses are compact and minified: `ok()` uses `JSON.stringify` and `compactRunResult()` omits echoed input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero counters, and false flags while always keeping `ok`, `exitCode`, and failure `errorKind`/`hint`. `run_command`/`run_on_many` accept `verbose: true` for the full shape.
 - `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
@@ -69,9 +77,9 @@
 - Errors are actionable: unknown aliases return `errorKind: 'alias_not_found'` plus up to three `suggestions`; sudo failures classify as `tty` (`tty: true` / `sudo -n`) or `sudo_password` (NOPASSWD / `sudo -n`). Every `failResult` carries an `errorKind`.
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped at 8 KiB stdout + 4 KiB stderr (`headtail`), `cwd=true`. Keep tool descriptions to one short sentence and param descriptions to a few words; put details in `sshya://guide` so `tools/list` stays under ~1,800 tokens.
 - Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import. An allowlist that parses to zero patterns (for example `--aliases ,`) denies every alias instead of failing open.
-- Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
+- Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, `write_remote_file`, and `replace_in_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution, and the read-only file tools (`read_remote_file`, `grep_remote`, `stat_remote`) stay because they only read; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
 - Guardrails: `copy`/`copy_file` refuse local operands that scp would interpret as remote (`host:path`) or that start with `-` (`errorKind: 'invalid-path'`), so a read-only download cannot become an upload to another host
-- Connections with `readonly: true` refuse `write_remote_file` and `copy_file` uploads (`errorKind: 'connection_readonly'`); `run_command` is not restricted by the flag
+- Connections with `readonly: true` refuse `replace_in_remote_file`, `write_remote_file`, and `copy_file` uploads (`errorKind: 'connection_readonly'`); `run_command` is not restricted by the flag
 - The active policy is exposed in server instructions and `sshya://guide`
 - Never call `process.exit` from a tool; return `{ ok, error }` with `isError` instead
 - Never `console.log` in the MCP process (stdout is the protocol channel)
