@@ -658,7 +658,7 @@ one avoided retry.
 | `run_command` — 64 KiB log, **shipped default** (8 KiB head+tail) | 22,710 | **2,818** | **87.6%** |
 | `run_command` — same log, `maxOutputBytes: 65536`, head-only (old shape) | 22,710 | 22,583 | 0.6% |
 | `run_command` — same log, 64 KiB head+tail (raised cap) | — | 22,425 | — |
-| `run_command` — same log, 16 KiB head+tail | 5,856 | 5,574 | 4.8% |
+| `run_command` — same log, 16 KiB cap (before: head; final: head+tail) | 5,856 | 5,574 | 4.8% |
 | `test_connection` — success | 52 | **15** | 71.2% |
 | `run_command` — auth failure | 249 | 99 | 60.2% |
 | `run_command` — host-key failure | 259 | 99 | 61.8% |
@@ -742,10 +742,10 @@ Task notes:
 ### Latency
 
 Same local-overhead picture as §3/§6; no regression from the extra tools. This
-run's medians: process floor 1.77 ms, `executeSshCommand` direct 1.73 ms, MCP
-`run_command` cold 2.12 ms, warm-pool flag 2.12 ms, `list_connections` (50)
-0.11 ms, `run_on_many` 10 hosts 9.32 ms, and the 64 KiB log at the 8 KiB
-head+tail default 1.92 ms. The spawn floor and the direct call overlap within
+run's medians: process floor 1.67 ms, `executeSshCommand` direct 1.76 ms, MCP
+`run_command` cold 2.15 ms, warm-pool flag 2.10 ms, `list_connections` (50)
+0.12 ms, `run_on_many` 10 hosts 8.27 ms, and the 64 KiB log at the 8 KiB
+head+tail default 1.99 ms. The spawn floor and the direct call overlap within
 run-to-run noise; the MCP layer adds ~0.4 ms. Everything is bounded by process
 spawn, and **real SSH handshake and pooled RTT are still not measured here**;
 `reused: true` is bookkeeping only.
@@ -771,10 +771,13 @@ no EPIPE, including a fake ssh that never drains stdin.
 - **Conflict cost.** `replace_in_remote_file`'s `conflict` path is covered by
   e2e (deterministic drift), but its token cost on real files was not measured.
 
-The two defects found while adding the file-tool e2e tests are fixed in this
-tree and are reflected above: file-tool responses were pretty-printed instead of
-minified, and `grep_remote` lost the file name when the search path was a single
-file (GNU grep needs `-H`).
+The three defects found in this round are fixed in this tree and are reflected
+above: file-tool responses were pretty-printed instead of minified;
+`grep_remote` lost the file name when the search path was a single file (GNU
+grep needs `-H`); and the atomic temp name used a literal `$$` because
+`quoteRemotePath` single-quotes `$`, so concurrent edits of the same file could
+share one temp path. The first two change the numbers in this section; the
+third changes only the remote argv.
 
 ---
 

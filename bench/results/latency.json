@@ -9,82 +9,82 @@
     {
       "label": "process floor: spawn fake ssh directly",
       "iterations": 40,
-      "medianMs": 1.77,
-      "p95Ms": 3.24,
+      "medianMs": 1.67,
+      "p95Ms": 1.91,
       "minMs": 1.57,
-      "maxMs": 4.58,
+      "maxMs": 2.91,
       "note": "OS process spawn + /bin/sh script; no sshya code"
     },
     {
       "label": "sshya direct: executeSshCommand (cold, small stdout)",
       "iterations": 40,
-      "medianMs": 1.73,
-      "p95Ms": 2.03,
-      "minMs": 1.63,
-      "maxMs": 2.2,
+      "medianMs": 1.76,
+      "p95Ms": 2.08,
+      "minMs": 1.6,
+      "maxMs": 9.32,
       "note": "spawn + byte capture + error classification; no MCP, no DB usage write"
     },
     {
       "label": "MCP run_command (10 connections, cold)",
       "iterations": 40,
-      "medianMs": 2.12,
-      "p95Ms": 2.35,
-      "minMs": 1.98,
-      "maxMs": 2.37,
+      "medianMs": 2.15,
+      "p95Ms": 2.38,
+      "minMs": 1.93,
+      "maxMs": 9.97,
       "note": "adds recordConnectionUsage (rewrites the whole store) + minified compact JSON + protocol"
     },
     {
       "label": "MCP run_command (warm pool flag, 10 connections)",
       "iterations": 40,
-      "medianMs": 2.12,
-      "p95Ms": 2.85,
-      "minMs": 2,
-      "maxMs": 6.37,
+      "medianMs": 2.1,
+      "p95Ms": 2.32,
+      "minMs": 1.99,
+      "maxMs": 4.05,
       "note": "reused=true bookkeeping only: the fake ssh still spawns; NOT a real pooled RTT"
     },
     {
       "label": "MCP run_command (50 connections, cold)",
       "iterations": 20,
-      "medianMs": 2.14,
-      "p95Ms": 2.29,
-      "minMs": 1.97,
-      "maxMs": 2.31,
+      "medianMs": 2.11,
+      "p95Ms": 2.3,
+      "minMs": 2.01,
+      "maxMs": 2.56,
       "note": "same work; measures the store rewrite cost as the fleet grows"
     },
     {
       "label": "MCP list_connections (50)",
       "iterations": 40,
-      "medianMs": 0.11,
+      "medianMs": 0.12,
       "p95Ms": 0.15,
       "minMs": 0.1,
-      "maxMs": 0.17,
+      "maxMs": 0.19,
       "note": "no ssh spawn; DB read + serialize the compact summary (alias/target/keyPath/remotePath)"
     },
     {
       "label": "MCP test_connection (cold)",
       "iterations": 40,
       "medianMs": 1.85,
-      "p95Ms": 2.24,
+      "p95Ms": 2.85,
       "minMs": 1.74,
-      "maxMs": 2.6,
+      "maxMs": 3.32,
       "note": "runs `true` through the same executor"
     },
     {
       "label": "MCP run_on_many (10 hosts, concurrency 4)",
       "iterations": 15,
-      "medianMs": 9.32,
-      "p95Ms": 24.72,
-      "minMs": 7.73,
-      "maxMs": 24.72,
+      "medianMs": 8.27,
+      "p95Ms": 11.2,
+      "minMs": 7.33,
+      "maxMs": 11.2,
       "note": "ten fake ssh processes, four at a time"
     },
     {
       "label": "MCP run_command (64 KiB stdout, 8 KiB headtail)",
       "iterations": 15,
-      "medianMs": 1.92,
-      "p95Ms": 2.2,
-      "minMs": 1.83,
-      "maxMs": 2.2,
+      "medianMs": 1.99,
+      "p95Ms": 2.35,
+      "minMs": 1.91,
+      "maxMs": 2.35,
       "note": "capture 64 KiB, keep 4+4 KiB, minify (~2.8k-token response)"
     },
     {
@@ -93,12 +93,12 @@
       "medianMs": 0.06,
       "p95Ms": 0.06,
       "minMs": 0.05,
-      "maxMs": 0.11
+      "maxMs": 0.1
     }
   ],
   "derived": {
-    "sshyaDirectOverheadMs": -0.04,
+    "sshyaDirectOverheadMs": 0.09,
     "mcpOverheadOverDirectMs": 0.39,
-    "mcpOverheadOverFloorMs": 0.35
+    "mcpOverheadOverFloorMs": 0.48
   }
 }
