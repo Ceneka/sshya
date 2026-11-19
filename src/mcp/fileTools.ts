@@ -87,8 +87,10 @@ const remoteOperand = (value: string): string => {
 const atomicTempPath = (target: string): string => {
   const dir = path.posix.dirname(target);
   const base = path.posix.basename(target);
-  // `$$` is expanded by the remote shell, keeping concurrent edits apart.
-  return path.posix.join(dir, `.${base}.sshya-tmp.$$`);
+  // A JS-generated suffix keeps concurrent edits apart. `$$` cannot do that
+  // here: quoteRemotePath single-quotes the name because of `$`, so the remote
+  // shell would see a literal "$$" and every call would share one temp path.
+  return path.posix.join(dir, `.${base}.sshya-tmp.${randomUUID().replace(/-/g, '').slice(0, 12)}`);
 };
 
 const isMode = (value: string | undefined): value is string =>

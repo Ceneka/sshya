@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { initDB, upsertConnection } from '../database';
+import { buildAtomicWriteCommand } from './fileTools';
 import { createMcpServer, type McpServerOptions } from './server';
 
 type JsonResult<T> = {
@@ -681,6 +682,20 @@ describe('stat_remote', () => {
 });
 
 describe('atomic write_remote_file', () => {
+  test('uses a unique temp path per call so concurrent edits cannot collide', () => {
+    const tempOf = (command: string): string => /__sshya_tmp=(.+)/.exec(command)?.[1] ?? '';
+    const first = tempOf(buildAtomicWriteCommand({ target: '/srv/app.conf' }));
+    const second = tempOf(buildAtomicWriteCommand({ target: '/srv/app.conf' }));
+
+    expect(first).not.toBe('');
+    expect(second).not.toBe('');
+    expect(first).not.toBe(second);
+    // A literal `$$` would be single-quoted by quoteRemotePath and never
+    // expanded, which is the bug this test pins.
+    expect(first).not.toContain('$$');
+    expect(first.startsWith('/srv/.app.conf.sshya-tmp.')).toBe(true);
+  });
+
   test('renames a temp file into place and preserves the mode', async () => {
     useLocalShell();
     const dir = workDir();
