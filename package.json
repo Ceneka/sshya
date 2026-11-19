@@ -1,6 +1,7 @@
 {
   "name": "sshya",
-  "module": "index.ts",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
   "type": "module",
   "version": "0.6.0",
   "description": "CLI and MCP server for managing SSH connections with aliases, pooled connections, and LLM-friendly JSON output",
@@ -39,31 +40,30 @@
   "scripts": {
     "start": "bun run index.ts",
     "mcp": "bun run index.ts mcp",
-    "build": "bun build index.ts --compile --outfile bin/sshya && bun build s.ts --compile --outfile bin/s",
+    "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "prepublishOnly": "bun run typecheck && bun test"
+    "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "chalk": "^6.0.0",
-    "commander": "^15.0.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
     "fuse.js": "^7.5.0",
-    "inquirer": "^14.2.2",
+    "inquirer": "^12.11.1",
     "zod": "^4.6.5"
   },
   "files": [
-    "index.ts",
-    "s.ts",
-    "src",
-    "!src/**/*.test.ts",
-    "README.md"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
+    "node": ">=20",
     "bun": ">=1.2.0"
   },
   "bin": {
-    "sshya": "index.ts",
-    "s": "s.ts"
+    "sshya": "dist/index.js",
+    "s": "dist/s.js"
   }
 }

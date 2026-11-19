@@ -9,8 +9,9 @@
 - **Agent Interface**: Non-interactive flags, `--json`, meaningful exit codes, and `sshya mcp`
 
 ## Architecture
-- **Runtime**: Bun (JavaScript runtime)
+- **Runtime**: Node.js >= 20 for the published CLI; Bun >= 1.2 for development, tests, and builds
 - **Language**: TypeScript
+- **Packaging**: `scripts/build.ts` runs `bun build --target node` and writes `dist/index.js` / `dist/s.js` with a `#!/usr/bin/env node` shebang; local modules are bundled and dependencies stay external
 
 ## Key Components
 
@@ -78,7 +79,9 @@
 8. **Diagnose**: `sshya doctor --probe --accept-new-host-key` → checks binaries, keys, agent, pool, and reachability
 
 ## Notable Implementation Details
-- `package.json` bins: `sshya` → `index.ts`, `s` → `s.ts`
+- `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints)
+- `index.ts` must not read `import.meta.main` directly: Bun's bundler rewrites it into a Bun-only `require` shim that throws under Node. It reads the property dynamically and falls back to comparing `argv[1]` with `import.meta.url`
+- Runtime code must stay Node-compatible (no `Bun.*`, `bun:` imports, or `import.meta.dir`); run `bun run build` before `npm pack` / `npm publish`
 - Usage tracking via `lastUsed` timestamps
 - Interactive commands guard on `process.stdin.isTTY`; no-TTY runs fail instead of hanging
 - `run`/`test` default to `BatchMode=yes`, `-T`, and a connect timeout

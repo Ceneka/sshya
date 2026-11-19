@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { Command, InvalidArgumentError } from 'commander';
 import pkg from './package.json' with { type: "json" };
@@ -326,15 +328,15 @@ program
   .action(() => {
     console.log(chalk.yellow('To make the ' + chalk.bold('s') + ' command globally accessible:'));
     console.log('\n' + chalk.bold('Option 1: Permanent Installation (Recommended)') + '\n');
-    console.log('1. Build the executable: ' + chalk.cyan('bun run build'));
-    console.log('2. Move the executable to a PATH directory (e.g., /usr/local/bin):');
-    console.log(chalk.cyan('   sudo mv bin/s /usr/local/bin/s'));
-    console.log('\n' + chalk.green('After these steps, you should be able to run ' + chalk.bold('s') + ' from any directory.'));
+    console.log('1. Install the package globally: ' + chalk.cyan('npm install -g sshya'));
+    console.log('2. Both ' + chalk.bold('sshya') + ' and ' + chalk.bold('s') + ' are now on your PATH.');
+    console.log('\n' + chalk.green('After this step, you can run ' + chalk.bold('s') + ' from any directory.'));
 
-    console.log('\n' + chalk.bold('Option 2: Temporary for Current Session') + '\n');
-    console.log('Add the current directory to your PATH for the current terminal session:');
-    console.log(chalk.cyan(`   export PATH="$PATH:${process.cwd()}/bin"`));
-    console.log('\n' + chalk.green('This will allow you to run ' + chalk.bold('s') + ' from this directory until you close the terminal.'));
+    console.log('\n' + chalk.bold('Option 2: Run without installing') + '\n');
+    console.log('Use npx (Node) or bunx (Bun) directly:');
+    console.log(chalk.cyan('   npx -y sshya --help'));
+    console.log(chalk.cyan('   bunx sshya --help'));
+    console.log('\n' + chalk.green('Both commands run the same published package.'));
     process.exit(0);
   });
 
@@ -364,7 +366,35 @@ async function runFromProcess() {
   await program.parseAsync(argvForCommander);
 }
 
+/**
+ * True when this module is the process entrypoint.
+ *
+ * Bun exposes `import.meta.main`, but Node 20 does not, and Bun's bundler
+ * rewrites a direct `import.meta.main` read into a Bun-only `require` shim that
+ * throws under Node. Read the property dynamically and fall back to comparing
+ * `argv[1]` with this module's URL so `dist/index.js` also runs under plain
+ * Node. Keeping the Bun check first preserves `bun run index.ts` and future
+ * standalone Bun builds.
+ */
+const isMainModule = (): boolean => {
+  // Assign to a variable first: Bun rewrites a direct `import.meta.main` read.
+  const meta: ImportMeta & { main?: unknown } = import.meta;
+  const main = meta['main'];
+  if (typeof main === 'boolean') {
+    return main;
+  }
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+};
+
 // Only execute when this module is the entrypoint (prevents side effects during tests)
-if (import.meta.main) {
+if (isMainModule()) {
   await runFromProcess();
 }
