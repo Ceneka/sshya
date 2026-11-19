@@ -92,7 +92,16 @@ let cacheSize: number = -1;
 const readDB = (): Connection[] => {
   const dbFilePath = getDbPath();
 
-  if (!fs.existsSync(dbFilePath)) {
+  // One stat instead of existsSync + statSync. Any failure (missing file, an
+  // unreadable directory) is treated as an empty store, which is what
+  // existsSync-based code did before.
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.statSync(dbFilePath, { throwIfNoEntry: false });
+  } catch {
+    stat = undefined;
+  }
+  if (!stat) {
     connectionCache = [];
     cachePath = dbFilePath;
     cacheMtimeMs = -1;
@@ -100,7 +109,6 @@ const readDB = (): Connection[] => {
     return connectionCache;
   }
 
-  const stat = fs.statSync(dbFilePath);
   if (connectionCache && cachePath === dbFilePath && stat.mtimeMs === cacheMtimeMs && stat.size === cacheSize) {
     return connectionCache;
   }
@@ -121,13 +129,18 @@ const writeDB = (data: Connection[]) => {
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
-  fs.writeFileSync(getDbPath(), JSON.stringify(data, null, 2));
+  const dbPath = getDbPath();
+  fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 
-  // Invalidate cache when data is written
-  connectionCache = null;
-  cachePath = null;
-  cacheMtimeMs = -1;
-  cacheSize = -1;
+  // Keep the store hot instead of invalidating it. `recordConnectionUsage` runs
+  // on every agent call, and dropping the cache forced the next call to read and
+  // parse the whole file again. The mtime/size of what we just wrote keeps the
+  // external-edit check intact.
+  const stat = fs.statSync(dbPath, { throwIfNoEntry: false });
+  connectionCache = data;
+  cachePath = dbPath;
+  cacheMtimeMs = stat?.mtimeMs ?? -1;
+  cacheSize = stat?.size ?? -1;
 };
 
 export const initDB = () => {
@@ -275,11 +288,33 @@ export const upsertConnection = (
   return addConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path, data.readonly);
 };
 
-export const recordConnectionUsage = (alias: string) => {
+/**
+ * Record usage for several aliases with a single read/write of the store.
+ * `run_on_many` updates up to 50 hosts per call; one write per call keeps the
+ * long-lived MCP server from rewriting the whole file once per host.
+ */
+export const recordConnectionsUsage = (aliases: Iterable<string>) => {
+  const wanted = new Set(aliases);
+  if (wanted.size === 0) {
+    return;
+  }
+
   const connections = readDB();
-  const connection = connections.find(c => c.alias === alias);
-  if (connection) {
-    connection.lastUsed = Date.now();
+  const now = Date.now();
+  let changed = false;
+
+  for (const connection of connections) {
+    if (wanted.has(connection.alias)) {
+      connection.lastUsed = now;
+      changed = true;
+    }
+  }
+
+  if (changed) {
     writeDB(connections);
   }
+};
+
+export const recordConnectionUsage = (alias: string) => {
+  recordConnectionsUsage([alias]);
 };

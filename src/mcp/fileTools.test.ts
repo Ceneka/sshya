@@ -696,6 +696,17 @@ describe('atomic write_remote_file', () => {
     expect(first.startsWith('/srv/.app.conf.sshya-tmp.')).toBe(true);
   });
 
+  test('reads mode, uid, and gid with a single stat invocation', () => {
+    // Each remote `stat` is its own process. Three of them per write showed up
+    // clearly against a real sshd, so keep this at one. Fields are split with
+    // parameter expansion because login shells such as zsh do not word-split
+    // unquoted expansions.
+    const command = buildAtomicWriteCommand({ target: '/srv/app.conf' });
+    expect(command.match(/stat -c /g)?.length).toBe(1);
+    expect(command).toContain('__sshya_uid=${__sshya_rest%% *}');
+    expect(command).not.toContain('set --');
+  });
+
   test('renames a temp file into place and preserves the mode', async () => {
     useLocalShell();
     const dir = workDir();
