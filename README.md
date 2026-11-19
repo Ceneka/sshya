@@ -11,6 +11,7 @@ This project is a command-line interface (CLI) tool named `sshya` for managing S
 - Import and export connections from/to a JSON file, including stdin/stdout.
 - Optional fzf picker with `sshya fzf`.
 - Agent interface with non-interactive flags, `--json`, exit codes, and an MCP server (`sshya mcp`).
+- Optional link to a [lazybackup](https://github.com/Ceneka/lazybackup) instance so its web UI manages your servers (`sshya link`, `sshya sync`).
 
 ## Agent / LLM usage
 
@@ -100,6 +101,10 @@ Notes for scripting:
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
 | `SSHYA_MCP_ALLOW` | unset | Alias allowlist for `sshya mcp` (comma-separated, supports `*`/`?` globs) |
 | `SSHYA_MCP_READ_ONLY` | unset | `1` removes MCP tools that mutate the store or write files |
+| `SSHYA_LINK_URL` / `SSHYA_LINK_TOKEN` | unset | Override the lazybackup link URL/token from `link.json` |
+| `SSHYA_CF_ACCESS_CLIENT_ID` / `SSHYA_CF_ACCESS_CLIENT_SECRET` | unset | Cloudflare Access service token for the link |
+| `SSHYA_LINK_TTL` | `300` | Seconds before auto-sync refreshes linked connections (`0` disables) |
+| `SSHYA_LINK_AUTO` | on | `0` disables auto-sync (manual `sshya sync` still works) |
 
 ### MCP client setup
 
@@ -252,15 +257,19 @@ and `copy_file` downloads still write local files at the caller-chosen path.
 - **Runtime:** Node.js >= 20 for the published CLI (`dist/`); Bun >= 1.2 for
   development, tests, and building.
 - **Language:** TypeScript
-- **Build:** `bun build --target node` via `scripts/build.ts`; local modules are
-  bundled into two files and npm dependencies stay external.
-- **Dependencies:**
+- **Build:** `bun build --target node` via `scripts/build.ts`; local modules and
+  runtime dependencies are bundled and minified into content-hashed ESM chunks,
+  so the published package has no runtime `dependencies`.
+- **Dependencies:** bundled into `dist` at build time (listed in
+  `devDependencies`):
     - `commander`: For command-line argument parsing.
-    - `inquirer`: For interactive prompts.
-    - `chalk`: for terminal string styling.
-    - `fuse.js`: for fuzzy searching connections.
     - `zod`: for validating user input and imported data.
     - `@modelcontextprotocol/sdk`: for the `sshya mcp` stdio server.
+- **In-house replacements** (`src/lib/`, no third-party code): `color.ts`
+  (chalk 5 subset, byte-identical output), `fuzzy.ts` (Fuse.js 7 Bitap scoring
+  for alias search), and `prompts.ts` (inquirer `input`/`confirm`/`select`/
+  `search`). `chalk`, `fuse.js`, and `inquirer` remain dev-only, as references
+  for the parity tests next to each module.
 
 ## Implementation Details
 The main application logic is in `index.ts`. SSH arguments are built in-process and passed directly to your system `ssh` binary, avoiding fragile shell string parsing. `src/helpers/ssh.ts` is the single place that assembles key, port, TTY, batch-mode, keepalive, host-key, pooling, and remote-command arguments, so the CLI, JSON output, and MCP tools stay consistent.
@@ -294,9 +303,16 @@ bun test
 bun run build              # writes dist/index.js and dist/s.js for Node
 ```
 
-`bun run build` bundles local modules with `bun build --target node`, keeps npm
-dependencies external, and rewrites the two shebangs to `#!/usr/bin/env node`.
+`bun run build` bundles local modules and runtime dependencies with
+`bun build --target node`, minifies them, splits dynamic imports (`sshya mcp`)
+into a separate chunk, and rewrites the two shebangs to `#!/usr/bin/env node`.
+The package ships `dist/` only and has no runtime `dependencies`.
 `npm publish` runs typecheck, tests, and the build via `prepublishOnly`.
+
+For startup work, `bun run bench:startup` measures `--version`, `--help`,
+`list --json`, and a pooled `run` against a throwaway local sshd (10 runs per
+case, median). It uses an isolated `SSHYA_DB` and never touches `~/.sshya` or
+`~/.ssh`.
 
 ## Connecting
 
@@ -332,6 +348,44 @@ The `copy` command also works as `sshya sc` or `sshya scp`.
 
 Relative remote paths are resolved from the connection's saved remote working directory when one is configured.
 If an exact alias is not found, `connect` and `copy` use the first fuzzy match from the same search used by the interactive picker.
+
+### Manage servers from lazybackup
+
+If you run [lazybackup](https://github.com/Ceneka/lazybackup), its web UI can be
+the single place where servers are managed. sshya pulls them over the API and
+keeps a local cache, so `s`, `run`, and MCP keep working offline.
+
+```bash
+# lazybackup → Settings → API / MCP → create a token (read_only is enough)
+sshya link set https://backup.example.com --token lb_xxx
+# behind Cloudflare Access: add a service token
+sshya link set https://backup.example.com --token lb_xxx \
+  --cf-client-id <id>.access --cf-client-secret <secret>
+# or pipe the token so it stays out of shell history
+pass lazybackup/token | sshya link set https://backup.example.com --token-stdin
+
+sshya sync          # pull now (also runs automatically every 5 min when used)
+sshya link show     # URL, masked secrets, last sync / last error
+sshya link unset    # stop syncing; linked entries become local (--purge deletes them)
+```
+
+How it maps:
+
+- The alias is the lazybackup server name, slugified (`Web Prod` → `web-prod`).
+- Keys: lazybackup's `systemKeyPath` (or a stored key's path) is translated from
+  the container mount `/root/.ssh` to `~/.ssh`, falling back to
+  `~/.ssh/<basename>`. Keys pasted into lazybackup are never exported: map each
+  one once per machine with `sshya link key <id|name> <path>` and every server
+  using it picks it up (`sshya link key` lists keys, their servers, and mappings).
+  `sshya update <alias> --key <path>` still overrides a single connection.
+- Linked connections are read-only for alias/user/host/port and cannot be
+  removed locally (`errorKind: linked_connection`). `key_path`, `remote_path`,
+  `readonly`, and usage history stay local.
+- Local connections with the same alias and target are adopted; a different
+  target with the same alias is reported as a conflict and left untouched.
+- Servers deleted in lazybackup are removed locally on the next sync. Purely
+  local connections are never touched.
+- Config lives next to the store in `link.json` (mode 0600).
 
 ### Troubleshooting
 

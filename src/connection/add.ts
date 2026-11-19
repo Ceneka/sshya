@@ -1,8 +1,8 @@
-import chalk from 'chalk';
-import inquirer from 'inquirer';
-import { connectionSchema, getConnectionByAlias, upsertConnection, type Connection } from '../database';
+import chalk from '../lib/color';
+import { getConnectionByAlias, upsertConnection, type Connection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { jsonEnabled, printJson } from '../output';
+import { loadConnectionSchema } from '../schema';
 import { testConnection } from './test';
 
 export interface AddOptions {
@@ -29,12 +29,13 @@ const parseTarget = (target?: string): { user?: string; host?: string } => {
   return { host: target };
 };
 
-const normalizeAddInput = (
+const normalizeAddInput = async (
   alias: string,
   target: string | undefined,
   options: AddOptions,
-): { alias: string; user: string; host: string; port?: string; key_path?: string; remote_path?: string } => {
+): Promise<{ alias: string; user: string; host: string; port?: string; key_path?: string; remote_path?: string }> => {
   const parsedTarget = parseTarget(target);
+  const connectionSchema = await loadConnectionSchema();
   const parsed = connectionSchema.safeParse({
     alias,
     user: options.user ?? parsedTarget.user ?? 'root',
@@ -96,7 +97,8 @@ export async function addConnectionPrompt(
 
     const cleanup = enableEscapeExit();
     try {
-      const answers = await inquirer.prompt([
+      const { prompt } = await import('../lib/prompts');
+      const answers = await prompt([
         {
           type: 'input',
           name: 'alias',
@@ -142,7 +144,7 @@ export async function addConnectionPrompt(
         return;
       }
 
-      const connection = saveConnection(alias, String(answers.host ?? ''), {
+      const connection = await saveConnection(alias, String(answers.host ?? ''), {
         user: answers.user as string | undefined,
         port: answers.port as string | undefined,
         key: answers.key_path as string | undefined,
@@ -154,7 +156,7 @@ export async function addConnectionPrompt(
         return;
       }
 
-      const { test } = await inquirer.prompt([
+      const { test } = await prompt([
         {
           type: 'confirm',
           name: 'test',
@@ -175,7 +177,7 @@ export async function addConnectionPrompt(
     return;
   }
 
-  const connection = saveConnection(alias!, target, options, json);
+  const connection = await saveConnection(alias!, target, options, json);
   if (!connection) {
     return;
   }
@@ -188,14 +190,14 @@ export async function addConnectionPrompt(
   }
 }
 
-const saveConnection = (
+const saveConnection = async (
   alias: string,
   target: string | undefined,
   options: AddOptions,
   json: boolean,
-): Connection | undefined => {
+): Promise<Connection | undefined> => {
   try {
-    const input = normalizeAddInput(alias, target, options);
+    const input = await normalizeAddInput(alias, target, options);
     const existed = Boolean(getConnectionByAlias(input.alias));
     const connection = upsertConnection(input, options.force === true);
 

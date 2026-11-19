@@ -1,6 +1,5 @@
-import chalk from "chalk";
-import Fuse from "fuse.js";
-import inquirer from "inquirer";
+import chalk from "../lib/color";
+import { fuzzySearch } from "../lib/fuzzy";
 import { getConnectionByAlias, getConnections, type Connection } from "../database";
 import { jsonEnabled } from "../output";
 import { enableEscapeExit } from "./escExit";
@@ -11,33 +10,33 @@ const getAliasChoices = () => {
         .map(c => ({ name: c.alias, value: c.alias }));
 };
 
-const searchAliasChoices = (term: string) => {
+/**
+ * Fuzzy matching uses `src/lib/fuzzy.ts`, a dependency-free port of the
+ * Fuse.js 7 scoring sshya used before (keys: ['name'], threshold 0.4), so
+ * suggestions and picker ordering are unchanged.
+ */
+const searchAliasChoices = async (term: string) => {
     const choices = getAliasChoices();
     if (term.trim().length === 0) {
         return choices;
     }
 
-    const fuse = new Fuse(choices, {
-        keys: ['name'],
-        threshold: 0.4,
-    });
-
-    return fuse.search(term).map(r => r.item);
+    return fuzzySearch(choices, term, choice => choice.name, { threshold: 0.4 });
 };
 
-export const findAliasBySearchTerm = (term: string): string | undefined => {
-    return searchAliasChoices(term)[0]?.value;
+export const findAliasBySearchTerm = async (term: string): Promise<string | undefined> => {
+    return (await searchAliasChoices(term))[0]?.value;
 };
 
 /**
  * Top fuzzy candidates for an unknown alias. These are hints only: callers must
  * never execute against them unless an interactive human explicitly chose one.
  */
-export const findAliasSuggestions = (term: string, limit: number = 3): string[] => {
+export const findAliasSuggestions = async (term: string, limit: number = 3): Promise<string[]> => {
     if (term.trim().length === 0) {
         return [];
     }
-    return searchAliasChoices(term)
+    return (await searchAliasChoices(term))
         .slice(0, Math.max(0, limit))
         .map(choice => choice.value);
 };
@@ -76,10 +75,10 @@ const hasInteractiveTerminal = (): boolean =>
  * `SSHYA_JSON`). Agents get a failure with suggestions instead, because a
  * near-match could send the command to a different host.
  */
-export const resolveAliasForCommand = (
+export const resolveAliasForCommand = async (
     term: string,
     options: ResolveAliasOptions = {},
-): AliasResolutionResult => {
+): Promise<AliasResolutionResult> => {
     const exact = getConnectionByAlias(term);
     if (exact) {
         return { ok: true, alias: exact.alias, connection: exact, fuzzy: false };
@@ -89,13 +88,13 @@ export const resolveAliasForCommand = (
     const interactive = options.interactive ?? hasInteractiveTerminal();
 
     if (json || !interactive) {
-        return { ok: false, suggestions: findAliasSuggestions(term) };
+        return { ok: false, suggestions: await findAliasSuggestions(term) };
     }
 
-    const matchedAlias = findAliasBySearchTerm(term);
+    const matchedAlias = await findAliasBySearchTerm(term);
     const connection = matchedAlias ? getConnectionByAlias(matchedAlias) : undefined;
     if (!connection) {
-        return { ok: false, suggestions: findAliasSuggestions(term) };
+        return { ok: false, suggestions: await findAliasSuggestions(term) };
     }
 
     console.error(chalk.grey(`Using alias "${connection.alias}" for "${term}"`));
@@ -123,14 +122,17 @@ export async function selectAlias(message: string = "Select a connection"): Prom
 
     const cleanup = enableEscapeExit();
     try {
-        const { alias } = await inquirer.prompt([
+        // Inquirer is a heavy interactive-only dependency; load it only when a
+        // human is actually about to be prompted.
+        const { prompt } = await import('../lib/prompts');
+        const { alias } = await prompt([
             {
                 type: 'search',
                 name: 'alias',
                 message,
                 // Fuzzy-search the aliases using Fuse.js as the user types.
-                // The signature matches the @inquirer/search documentation:
-                //   (term: string | void, { signal }: { signal: AbortSignal }) => Promise<Choice[]>
+                // The signature matches SearchConfig.source in src/lib/prompts.ts:
+                //   (term: string | undefined, { signal }) => Promise<ChoiceInput[]>
                 source: async (term: unknown) => {
                     // When term is undefined or empty, return the full, recently-used-sorted list.
                     if (typeof term !== 'string' || term.trim().length === 0) {
@@ -145,4 +147,4 @@ export async function selectAlias(message: string = "Select a connection"): Prom
     } finally {
         cleanup();
     }
-} 
+}

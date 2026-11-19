@@ -1,7 +1,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { z } from 'zod';
 
 const DEFAULT_DB_FILE = path.join(os.homedir(), '.sshya', 'sshm.json');
 
@@ -33,17 +32,55 @@ export interface Connection {
    * restriction: `run_command` remains arbitrary.
    */
   readonly?: boolean;
+  /**
+   * Present when the connection is managed by a linked lazybackup instance
+   * (see `src/link/`). The web UI is the source of truth for alias, user, host,
+   * and port; only local overlay fields (`key_path`, `remote_path`, `readonly`,
+   * `lastUsed`) may be changed here.
+   */
+  link?: ConnectionLink;
 }
 
-export const connectionSchema = z.object({
-  alias: z.string().min(1),
-  user: z.string().min(1),
-  host: z.string().min(1),
-  key_path: z.string().optional(),
-  port: z.union([z.string(), z.number()]).optional(),
-  remote_path: z.string().optional(),
-  readonly: z.boolean().optional(),
-});
+export interface ConnectionLink {
+  source: 'lazybackup';
+  /** lazybackup `servers.id`. */
+  id: string;
+  /** Display name in lazybackup (the alias is derived from it). */
+  name?: string;
+  /** lazybackup auth type; password servers cannot run in BatchMode. */
+  auth?: 'key' | 'password';
+  /** True once the key path was overridden locally; sync stops touching it. */
+  localKey?: boolean;
+}
+
+/** Thrown when a local mutation targets a field owned by the linked store. */
+export class LinkedConnectionError extends Error {
+  readonly errorKind = 'linked_connection';
+  constructor(alias: string, action: string) {
+    super(
+      `Connection "${alias}" is managed by lazybackup; ${action} must be done in the lazybackup web UI. ` +
+        'Locally you can only change key_path, remote_path, and readonly.',
+    );
+    this.name = 'LinkedConnectionError';
+  }
+}
+
+const normalizeLink = (link: unknown): ConnectionLink | undefined => {
+  if (!link || typeof link !== 'object') {
+    return undefined;
+  }
+  const value = link as Partial<ConnectionLink>;
+  if (value.source !== 'lazybackup' || typeof value.id !== 'string' || !value.id) {
+    return undefined;
+  }
+  return {
+    source: 'lazybackup',
+    id: value.id,
+    ...(typeof value.name === 'string' && value.name ? { name: value.name } : {}),
+    ...(value.auth === 'key' || value.auth === 'password' ? { auth: value.auth } : {}),
+    ...(value.localKey === true ? { localKey: true } : {}),
+  };
+};
 
 const normalizeOptionalString = (value?: string | number | null): string | undefined => {
   if (value === undefined || value === null) {
@@ -89,6 +126,7 @@ const normalizeConnection = (connection: Connection): Connection => {
     port: normalizedPort,
     remote_path: normalizedRemotePath,
     readonly: connection.readonly === true ? true : undefined,
+    link: normalizeLink(connection.link),
   };
 };
 
@@ -103,7 +141,16 @@ let cacheSize: number = -1;
 const readDB = (): Connection[] => {
   const dbFilePath = getDbPath();
 
-  if (!fs.existsSync(dbFilePath)) {
+  // One stat instead of existsSync + statSync. Any failure (missing file, an
+  // unreadable directory) is treated as an empty store, which is what
+  // existsSync-based code did before.
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.statSync(dbFilePath, { throwIfNoEntry: false });
+  } catch {
+    stat = undefined;
+  }
+  if (!stat) {
     connectionCache = [];
     cachePath = dbFilePath;
     cacheMtimeMs = -1;
@@ -111,7 +158,6 @@ const readDB = (): Connection[] => {
     return connectionCache;
   }
 
-  const stat = fs.statSync(dbFilePath);
   if (connectionCache && cachePath === dbFilePath && stat.mtimeMs === cacheMtimeMs && stat.size === cacheSize) {
     return connectionCache;
   }
@@ -132,13 +178,18 @@ const writeDB = (data: Connection[]) => {
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
-  fs.writeFileSync(getDbPath(), JSON.stringify(data, null, 2));
+  const dbPath = getDbPath();
+  fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
 
-  // Invalidate cache when data is written
-  connectionCache = null;
-  cachePath = null;
-  cacheMtimeMs = -1;
-  cacheSize = -1;
+  // Keep the store hot instead of invalidating it. `recordConnectionUsage` runs
+  // on every agent call, and dropping the cache forced the next call to read and
+  // parse the whole file again. The mtime/size of what we just wrote keeps the
+  // external-edit check intact.
+  const stat = fs.statSync(dbPath, { throwIfNoEntry: false });
+  connectionCache = data;
+  cachePath = dbPath;
+  cacheMtimeMs = stat?.mtimeMs ?? -1;
+  cacheSize = stat?.size ?? -1;
 };
 
 export const initDB = () => {
@@ -214,6 +265,10 @@ export const getConnectionByAlias = (alias: string) => {
 
 export const removeConnection = (alias: string) => {
   const connections = readDB();
+  const target = connections.find(c => c.alias === alias);
+  if (target?.link) {
+    throw new LinkedConnectionError(alias, 'removal');
+  }
   const newConnections = connections.filter(c => c.alias !== alias);
   if (newConnections.length === connections.length) {
     return false;
@@ -246,11 +301,32 @@ export const updateConnection = (
     throw new Error(`Connection with alias "${normalizedAlias}" already exists.`);
   }
 
+  const nextKeyPath = expandHomePath(normalizeOptionalString(newKeyPath));
+  const nextPort = normalizeOptionalString(newPort);
+  if (connection.link) {
+    if (
+      normalizedAlias !== connection.alias ||
+      newUser.trim() !== connection.user ||
+      newHost.trim() !== connection.host ||
+      nextPort !== connection.port
+    ) {
+      throw new LinkedConnectionError(connection.alias, 'changes to alias, user, host, or port');
+    }
+    if (nextKeyPath !== connection.key_path) {
+      // An explicit local key wins over the synced one; clearing it hands the
+      // key back to the next sync.
+      connection.link = { ...connection.link, localKey: nextKeyPath ? true : undefined };
+      if (!connection.link.localKey) {
+        delete connection.link.localKey;
+      }
+    }
+  }
+
   connection.alias = normalizedAlias;
   connection.user = newUser.trim();
   connection.host = newHost.trim();
-  connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
-  connection.port = normalizeOptionalString(newPort);
+  connection.key_path = nextKeyPath;
+  connection.port = nextPort;
   connection.remote_path = normalizeOptionalString(newRemotePath);
   if (newReadonly !== undefined) {
     connection.readonly = newReadonly === true ? true : undefined;
@@ -286,11 +362,41 @@ export const upsertConnection = (
   return addConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path, data.readonly);
 };
 
-export const recordConnectionUsage = (alias: string) => {
+/**
+* Replace the whole store. Used by link sync, which computes the next state
+ * from the current one plus the remote list in a single pass.
+ */
+export const replaceConnections = (connections: Connection[]) => {
+  writeDB(connections.map(normalizeConnection));
+};
+
+/**
+ * Record usage for several aliases with a single read/write of the store.
+ * `run_on_many` updates up to 50 hosts per call; one write per call keeps the
+ * long-lived MCP server from rewriting the whole file once per host.
+ */
+export const recordConnectionsUsage = (aliases: Iterable<string>) => {
+  const wanted = new Set(aliases);
+  if (wanted.size === 0) {
+    return;
+  }
+
   const connections = readDB();
-  const connection = connections.find(c => c.alias === alias);
-  if (connection) {
-    connection.lastUsed = Date.now();
+  const now = Date.now();
+  let changed = false;
+
+  for (const connection of connections) {
+    if (wanted.has(connection.alias)) {
+      connection.lastUsed = now;
+      changed = true;
+    }
+  }
+
+  if (changed) {
     writeDB(connections);
   }
+};
+
+export const recordConnectionUsage = (alias: string) => {
+  recordConnectionsUsage([alias]);
 };

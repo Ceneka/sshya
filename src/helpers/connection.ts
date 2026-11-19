@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import chalk from "../lib/color";
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage } from "../database";
 import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from "./ssh";
 import { buildRemoteCommand } from "./shell";

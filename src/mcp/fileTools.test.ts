@@ -82,7 +82,7 @@ const seed = (alias: string, remotePath?: string, readonly?: boolean): void => {
 };
 
 const openServer = async (options: McpServerOptions = {}) => {
-  const server = createMcpServer(options);
+  const server = await createMcpServer(options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'sshya-files-test', version: '0.0.0' });
 
@@ -694,6 +694,17 @@ describe('atomic write_remote_file', () => {
     // expanded, which is the bug this test pins.
     expect(first).not.toContain('$$');
     expect(first.startsWith('/srv/.app.conf.sshya-tmp.')).toBe(true);
+  });
+
+  test('reads mode, uid, and gid with a single stat invocation', () => {
+    // Each remote `stat` is its own process. Three of them per write showed up
+    // clearly against a real sshd, so keep this at one. Fields are split with
+    // parameter expansion because login shells such as zsh do not word-split
+    // unquoted expansions.
+    const command = buildAtomicWriteCommand({ target: '/srv/app.conf' });
+    expect(command.match(/stat -c /g)?.length).toBe(1);
+    expect(command).toContain('__sshya_uid=${__sshya_rest%% *}');
+    expect(command).not.toContain('set --');
   });
 
   test('renames a temp file into place and preserves the mode', async () => {

@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import type { Connection } from '../database';
 import type { SshErrorKind } from '../helpers/errors';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
@@ -72,7 +72,7 @@ export async function testConnectionPrompt(alias?: string, options: TestOptions 
     alias = await selectAlias('Select a connection to test');
   }
 
-  const lookup = resolveAliasForCommand(alias, { json });
+  const lookup = await resolveAliasForCommand(alias, { json });
 
   if (!lookup.ok) {
     if (json) {

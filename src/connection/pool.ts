@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { getConnections, type Connection } from '../database';
 import {
   controlSocketPath,

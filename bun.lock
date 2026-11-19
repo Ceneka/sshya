@@ -4,17 +4,15 @@
   "workspaces": {
     "": {
       "name": "sshya",
-      "dependencies": {
+      "devDependencies": {
         "@modelcontextprotocol/sdk": "^1.32.2",
+        "@types/bun": "^1.4.2",
         "chalk": "^5.6.2",
         "commander": "^14.0.3",
         "fuse.js": "^7.5.0",
         "inquirer": "^12.11.1",
-        "zod": "^4.6.5",
-      },
-      "devDependencies": {
-        "@types/bun": "^1.4.2",
         "typescript": "^7.0.2",
+        "zod": "^4.6.5",
       },
     },
   },

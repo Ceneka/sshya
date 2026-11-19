@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import chalk from "../lib/color";
 import os from "os";
 import { getConnections } from "../database";
 import { buildSshArgs, formatShellCommand } from "../helpers/ssh";

@@ -1,14 +1,13 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import path from 'path';
-import { z } from 'zod';
 import pkg from '../../package.json' with { type: 'json' };
 import {
-  connectionSchema,
   getConnectionByAlias,
   getConnections,
   initDB,
+  LinkedConnectionError,
   recordConnectionUsage,
+  recordConnectionsUsage,
   removeConnection,
   updateConnection,
   upsertConnection,
@@ -19,6 +18,8 @@ import { findAliasSuggestions } from '../helpers/selectAlias';
 import { executeCopy } from '../connection/copy';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
+import { loadConnectionSchema } from '../schema';
+import { autoSync } from '../link/sync';
 import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
@@ -38,6 +39,11 @@ const ok = (data: unknown, isError = false): ToolResult => ({
 
 const failResult = (message: string, errorKind: string): ToolResult =>
   ok({ ok: false, errorKind, error: message }, true);
+
+const storeFailure = (err: unknown): ToolResult =>
+  err instanceof LinkedConnectionError
+    ? ok({ ok: false, errorKind: err.errorKind, error: err.message, hint: 'Edit it in the lazybackup web UI; only keyPath, remotePath, and readonly are local.' }, true)
+    : failResult(err instanceof Error ? err.message : String(err), 'store_error');
 
 const aliasDenial = (policy: McpPolicy, alias: string): ToolResult =>
   failResult(
@@ -62,13 +68,13 @@ const MCP_DEFAULT_STDOUT_BYTES = 8 * 1024;
 const MCP_DEFAULT_STDERR_BYTES = 4 * 1024;
 
 /** Fuzzy candidates are hints only: never execute against a suggestion. */
-const aliasSuggestions = (policy: McpPolicy, alias: string): string[] =>
-  findAliasSuggestions(alias, 25)
+const aliasSuggestions = async (policy: McpPolicy, alias: string): Promise<string[]> =>
+  (await findAliasSuggestions(alias, 25))
     .filter(candidate => policy.isAliasAllowed(candidate))
     .slice(0, 3);
 
-const aliasNotFound = (policy: McpPolicy, alias: string): ToolResult => {
-  const suggestions = aliasSuggestions(policy, alias);
+const aliasNotFound = async (policy: McpPolicy, alias: string): Promise<ToolResult> => {
+  const suggestions = await aliasSuggestions(policy, alias);
   return ok({
     ok: false,
     errorKind: 'alias_not_found',
@@ -159,6 +165,7 @@ const serializeConnectionSummary = (connection: Connection): Record<string, unkn
   ...(connection.key_path ? { keyPath: connection.key_path } : {}),
   ...(connection.remote_path ? { remotePath: connection.remote_path } : {}),
   ...(connection.readonly === true ? { readonly: true } : {}),
+  ...(connection.link ? { linked: true } : {}),
 });
 
 const serializeConnection = (connection: Connection) => {
@@ -176,7 +183,10 @@ const listAllowedConnections = (policy: McpPolicy): Connection[] =>
     .filter(connection => policy.isAliasAllowed(connection.alias))
     .sort(sortByLastUsed);
 
-const registerTools = (server: McpServer, policy: McpPolicy): void => {
+const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void> => {
+  // Zod is evaluated only for the MCP server (and lazily on first use here),
+  // never for the ordinary CLI commands.
+  const { z } = await import('zod');
   server.registerTool(
     'list_connections',
     {
@@ -184,7 +194,10 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    async () => ok(listAllowedConnections(policy).map(serializeConnectionSummary)),
+    async () => {
+      await autoSync();
+      return ok(listAllowedConnections(policy).map(serializeConnectionSummary));
+    },
   );
 
   server.registerTool(
@@ -200,7 +213,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       return ok(serializeConnection(connection));
     },
@@ -227,6 +240,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           return aliasDenial(policy, alias);
         }
 
+        const connectionSchema = await loadConnectionSchema();
         const parsed = connectionSchema.safeParse({
           alias,
           user,
@@ -253,7 +267,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           }, overwrite === true);
           return ok({ ok: true, created: !existed, connection: serializeConnection(connection) });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
+          return storeFailure(err);
         }
       },
     );
@@ -283,7 +297,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
 
         const merged = {
@@ -296,6 +310,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           readonly: readonly !== undefined ? readonly : existing.readonly,
         };
 
+        const connectionSchema = await loadConnectionSchema();
         const parsed = connectionSchema.safeParse(merged);
         if (!parsed.success) {
           return failResult(parsed.error.issues.map(issue => issue.message).join(', '), 'invalid_arguments');
@@ -315,7 +330,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           const connection = getConnectionByAlias(parsed.data.alias);
           return ok({ ok: true, connection: connection ? serializeConnection(connection) : undefined });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
+          return storeFailure(err);
         }
       },
     );
@@ -333,9 +348,13 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         }
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
-        removeConnection(alias);
+        try {
+          removeConnection(alias);
+        } catch (err) {
+          return storeFailure(err);
+        }
         return ok({ ok: true, removed: existing });
       },
     );
@@ -359,7 +378,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       const result = await testConnection(connection, {
         timeoutMs: timeoutMs ?? 5000,
@@ -396,7 +415,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
 
       recordConnectionUsage(alias);
@@ -480,6 +499,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
 
       const results = new Array<RunLike>(uniqueAliases.length);
+      const usedAliases = new Set<string>();
       let cursor = 0;
       let stop = false;
 
@@ -491,7 +511,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           const connection = getConnectionByAlias(alias);
 
           if (!connection) {
-            const suggestions = aliasSuggestions(policy, alias);
+            const suggestions = await aliasSuggestions(policy, alias);
             results[index] = {
               ok: false,
               alias,
@@ -505,7 +525,9 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             continue;
           }
 
-          recordConnectionUsage(alias);
+          // Collect first, then write once: a per-host write would rewrite the
+          // whole store up to 50 times per call.
+          usedAliases.add(alias);
           const result = await executeSshCommand(connection, command, {
             batchMode: true,
             tty: tty === true,
@@ -527,6 +549,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const workers = Math.min(concurrency ?? 4, uniqueAliases.length);
       await Promise.all(Array.from({ length: workers }, worker));
+      recordConnectionsUsage(usedAliases);
 
       // Workers always fill every slot unless failFast stopped them.
       for (let index = 0; index < results.length; index += 1) {
@@ -603,7 +626,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const connection = getConnectionByAlias(alias);
         if (!connection) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
         if (connection.readonly === true) {
           return readonlyConnectionDenial(alias, 'write_remote_file calls');
@@ -711,7 +734,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       if (connection.readonly === true && direction === 'upload') {
         return readonlyConnectionDenial(alias, 'copy_file uploads');
@@ -747,7 +770,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       const args = interactive ? buildInteractiveSshArgs(connection) : buildSshArgs(connection);
       return ok({
@@ -783,6 +806,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         const refused: Array<{ alias: string; error: string; errorKind: 'alias_not_allowed' }> = [];
         const invalid: Array<{ connection: unknown; error: string; errorKind?: string }> = [];
 
+        const connectionSchema = await loadConnectionSchema();
         for (const candidate of connections) {
           const parsed = connectionSchema.safeParse({
             alias: candidate.alias,
@@ -831,7 +855,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             invalid.push({
               connection: candidate,
               error: err instanceof Error ? err.message : String(err),
-              errorKind: 'store_error',
+              errorKind: err instanceof LinkedConnectionError ? err.errorKind : 'store_error',
             });
           }
         }
@@ -851,7 +875,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     );
   }
 
-  registerFileTools(server, policy);
+  await registerFileTools(server, policy);
 
   server.registerResource(
     'connections',
@@ -915,7 +939,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which part survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, `connection_readonly`, and `linked_connection`.',
           '- An unknown alias returns `errorKind: "alias_not_found"` with up to three `suggestions`; fix the alias and retry, never execute against a suggestion automatically.',
           '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` when sudo needs a terminal. Prefer passwordless `sudo -n` for agents.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
@@ -932,6 +956,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',
           '- Read-only mode guards the sshya store against MCP mutations and the remote host against uploads. It does not sandbox anything: run_command and run_on_many can still change anything the SSH user can, and copy_file downloads still write local files at the chosen path.',
           '- Connection details are stored locally in `~/.sshya/sshm.json`; set `SSHYA_DB` to isolate an agent workspace.',
+          '- Connections marked `linked: true` come from a lazybackup instance (`sshya link`), which is their source of truth. Alias/user/host/port changes and removal are refused with `errorKind: "linked_connection"`; only keyPath, remotePath, and readonly are local. The list refreshes from lazybackup automatically.',
         ].join('\n'),
       }],
     }),
@@ -940,7 +965,10 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
 export type McpServerOptions = McpPolicyOptions;
 
-export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
+export const createMcpServer = async (options: McpServerOptions = {}): Promise<McpServer> => {
+  // Load the MCP SDK lazily so commands other than `sshya mcp` never evaluate
+  // its (large) module graph.
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
   const policy = resolveMcpPolicy(options);
   const server = new McpServer(
     {
@@ -960,15 +988,21 @@ export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
     },
   );
 
-  registerTools(server, policy);
+  await registerTools(server, policy);
   return server;
 };
 
 export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {
   initDB();
-  const server = createMcpServer(options);
+  const server = await createMcpServer(options);
+  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Keep linked (lazybackup) connections fresh in a long-running process.
+  // autoSync is TTL-gated and never throws; the timer must not keep us alive.
+  void autoSync();
+  setInterval(() => void autoSync(), 60_000).unref();
 
   if (process.env.SSHYA_MCP_DEBUG === '1') {
     console.error(`sshya MCP server ${pkg.version} listening on stdio`);

@@ -1,9 +1,9 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import fs from 'fs';
-import inquirer from 'inquirer';
-import { addConnection, connectionSchema, getConnectionByAlias, updateConnection } from '../database';
+import { addConnection, getConnectionByAlias, updateConnection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { jsonEnabled, printJson } from '../output';
+import { loadConnectionSchema, type ConnectionInput } from '../schema';
 
 export type ImportStrategy = 'ask' | 'skip' | 'overwrite' | 'error';
 
@@ -90,7 +90,8 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
         ? 'error'
         : requestedStrategy;
 
-    const valid: Array<ReturnType<typeof connectionSchema.parse>> = [];
+    const connectionSchema = await loadConnectionSchema();
+    const valid: ConnectionInput[] = [];
     const summary: ImportSummary = {
         ok: true,
         total: connectionsToImport.length,
@@ -139,11 +140,18 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
         for (const parsedConn of valid) {
             const existingConn = getConnectionByAlias(parsedConn.alias);
 
+            if (existingConn?.link) {
+                summary.skipped++;
+                summary.errors.push(`Skipped "${parsedConn.alias}": it is managed by lazybackup.`);
+                continue;
+            }
+
             if (existingConn) {
                 let action: 'Skip' | 'Overwrite' = 'Skip';
 
                 if (strategy === 'ask') {
-                    const answer = await inquirer.prompt([
+                    const { prompt } = await import('../lib/prompts');
+                    const answer = await prompt([
                         {
                             type: 'select',
                             name: 'action',

@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { spawn } from 'child_process';
 import { connectConnectionPrompt } from '../connection/connect';
 import { getConnections } from '../database';

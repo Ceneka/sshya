@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { spawn } from 'child_process';
 import { recordConnectionUsage } from '../database';
 import { buildInteractiveSshArgs } from '../helpers/ssh';
@@ -11,7 +11,7 @@ export async function connectConnectionPrompt(alias?: string): Promise<void> {
 
     // `connect` is interactive by nature: a typo may fuzzy-match when both
     // stdin and stdout are TTYs. JSON mode and pipes stay exact-only.
-    const lookup = resolveAliasForCommand(alias);
+    const lookup = await resolveAliasForCommand(alias);
 
     if (!lookup.ok) {
         console.error(chalk.red(`Alias not found: ${alias}`));

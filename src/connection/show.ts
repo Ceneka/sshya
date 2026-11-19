@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from '../helpers/ssh';
 import { jsonEnabled, printJson } from '../output';
@@ -24,7 +24,7 @@ export async function showConnectionPrompt(alias?: string, options: ShowOptions 
     alias = await selectAlias('Select a connection to show');
   }
 
-  const lookup = resolveAliasForCommand(alias, { json });
+  const lookup = await resolveAliasForCommand(alias, { json });
 
   if (!lookup.ok) {
     if (json) {

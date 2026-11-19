@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import path from 'path';
 import { spawn } from 'child_process';
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
@@ -311,7 +311,7 @@ export async function copyConnectionPrompt(
         alias = await selectAlias(download ? 'Select a connection to copy from' : 'Select a connection to copy to');
     }
 
-    const lookup = resolveAliasForCommand(alias, { json });
+    const lookup = await resolveAliasForCommand(alias, { json });
     if (!lookup.ok) {
         if (json) {
             printJson({

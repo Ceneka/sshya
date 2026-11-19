@@ -7,11 +7,12 @@
 - **Remote Execution**: Run non-interactive commands over a stored connection (`run`)
 - **Import/Export**: JSON-based connection backup and restore (stdin/stdout supported)
 - **Agent Interface**: Non-interactive flags, `--json`, meaningful exit codes, and `sshya mcp`
+- **lazybackup link**: Optional pull-sync from a lazybackup instance, whose web UI is the source of truth for linked servers
 
 ## Architecture
 - **Runtime**: Node.js >= 20 for the published CLI; Bun >= 1.2 for development, tests, and builds
 - **Language**: TypeScript
-- **Packaging**: `scripts/build.ts` runs `bun build --target node` and writes `dist/index.js` / `dist/s.js` with a `#!/usr/bin/env node` shebang; local modules are bundled and dependencies stay external
+- **Packaging**: `scripts/build.ts` runs `bun build --target node` with dependency bundling, minification, and code splitting; writes `dist/index.js` / `dist/s.js` plus hashed chunks, rewrites shebangs to `#!/usr/bin/env node`, and publishes with no runtime `dependencies` (third-party code ships inside `dist`)
 
 ## Key Components
 
@@ -19,7 +20,16 @@
 - `Connection` interface with id, alias, user, host, key_path, port, remote_path, lastUsed, and optional `readonly`
 - `upsertConnection()` for idempotent add-or-replace
 - `getDbPath()` honors `SSHYA_DB` so tests and agents can use an isolated store
-- Cache is keyed on file mtime/size so a long-running MCP server sees external edits
+- Cache is keyed on file mtime/size so a long-running MCP server sees external edits. The cache stays valid after sshya's own writes (they re-stat the file), so `recordConnectionUsage` does not force a re-read per call
+- `recordConnectionsUsage(aliases)` updates several aliases with one store write; `run_on_many` uses it instead of one write per host
+
+### lazybackup link (`src/link/`)
+- `config.ts`: `link.json` (0600) next to the store (`dirname(getDbPath())`) with url, token, Cloudflare Access service token, `ttlSeconds` (default 300), `keyMap` (default `/root/.ssh` → `~/.ssh`), and `vaultKeys` (lazybackup stored-key id → local key path, set by `link key`); `SSHYA_LINK_URL`/`SSHYA_LINK_TOKEN`/`SSHYA_CF_ACCESS_CLIENT_ID`/`SSHYA_CF_ACCESS_CLIENT_SECRET`/`SSHYA_LINK_TTL` override it. `link-state.json` records `lastSyncAt`/`lastAttemptAt`/`lastError`. `resolveLocalKeyPath()` maps a container key path to an existing local file (key map, as-is, then `~/.ssh/<basename>`)
+- `lazybackup.ts`: `GET /api/servers` (+ `/api/ssh-keys` only when a server uses `sshKeyId`) with Bearer + `CF-Access-Client-*` headers and `redirect: 'manual'`; errors are `LinkFetchError` with `link_unreachable`, `link_unauthorized`, `link_access_blocked` (redirect/HTML login wall), or `link_bad_response`. Secrets are never fetched: lazybackup redacts passwords and key contents
+- `sync.ts`: `planSync()` is pure. Match by `link.id`; alias = slugified name (duplicates get `-2`, ordered by id); adopt a local unlinked entry with the same alias and target; report a conflict for the same alias with another target; remove linked entries missing remotely; never touch unlinked entries. Key precedence: `vaultKeys[sshKeyId]` (if the file exists), then `systemKeyPath`/stored key path via `resolveLocalKeyPath()`; `key_path` follows the remote unless `link.localKey`. `syncLink()` writes via `replaceConnections()` only when something changed. `autoSync()` never throws: TTL-gated, 3 s timeout, 60 s backoff after a failure, `SSHYA_LINK_AUTO=0` disables it
+- Auto-sync runs in the CLI `preAction` hook for commands that read connections (not `link *`), in `s.ts`, on MCP `list_connections`, and on a 60 s unref'd timer in `runMcpServer()`
+- `Connection.link = { source: 'lazybackup', id, name?, auth?, localKey? }`. `updateConnection()` throws `LinkedConnectionError` (`errorKind: 'linked_connection'`) for alias/user/host/port changes; `removeConnection()` throws for linked entries. Changing `key_path` sets/clears `localKey`. CLI `remove`/`update`, `import` (skips), and MCP mutation tools surface it
+- Commands: `link set [url] --token|--token-stdin --cf-client-id --cf-client-secret --ttl --no-sync`, `link show`, `link key [id|name] [path] [--unset]` (lists stored keys with their servers, or maps one and syncs; always fetches `/api/ssh-keys`), `link unset [--purge]` (default detaches linked entries into local ones), `sync`
 
 ### SSH argv (`src/helpers/ssh.ts`)
 - Single source of truth for `-i`, `-p`, `-t`/`-T`, `BatchMode`, `ConnectTimeout`, keepalives, host-key policy, ControlMaster, and `cd <remote_path> && <command>`
@@ -53,6 +63,7 @@
 - `fzf`: In-process fzf picker that connects to the selected alias
 - `s`: Shortcut entrypoint that always runs `connect` (interactive picker or alias)
 - `mcp`: Starts the stdio MCP server (`--aliases a,b`, `--read-only`)
+- `link set|show|unset` / `sync`: lazybackup link (see above)
 
 ### Output (`src/output.ts`)
 - `jsonEnabled()` returns true for `--json` or `SSHYA_JSON=1`
@@ -61,18 +72,20 @@
 
 ### Remote file tools (`src/mcp/fileTools.ts`)
 - `registerFileTools(server, policy)` adds `read_remote_file`, `grep_remote`, and `stat_remote`; `replace_in_remote_file` is only registered outside read-only mode
-- `read_remote_file` does one round trip: existence/directory/binary guards, `awk 'END { print NR }'` for `totalLines`, and `sed -n 'a,bp'` piped through `dd` so the transfer is byte-capped. Lines are numbered `${line}\t${text}` by default
+- `read_remote_file` does one round trip: existence/directory/binary guards, `sed -n '$='` for `totalLines`, and `sed -n 'a,bp'` piped through `dd` so the transfer is byte-capped. Lines are numbered `${line}\t${text}` by default
 - `replace_in_remote_file` reads the file with a `cksum` fingerprint plus GNU/BSD `stat` mode/uid/gid, counts non-overlapping `oldText` matches locally, and fails with `errorKind: 'match_count'` (plus actual count and matching line numbers) unless `expectedCount` matches. It uploads through stdin to `.<base>.sshya-tmp.<random>` in the same directory, verifies the byte count, restores mode/owner where possible, then `mv`s it into place. A changed `cksum` fails with `errorKind: 'conflict'`; files over 2 MiB are refused
 - `grep_remote` runs `grep -rnE`/`-rnF` with an optional `--include` glob and returns compact `file:line:text` matches; a leading `./` is stripped
-- `stat_remote` reports size/mode/mtime/type for up to 50 paths, trying GNU `stat -c` then BSD `stat -f`
-- `buildAtomicWriteCommand()` builds the temp-file-plus-`mv` script used by both `replace_in_remote_file` and `write_remote_file` with `atomic: true`; mode/owner are copied from the existing file where the platform allows it
+- `stat_remote` reports size/mode/mtime/type for up to 50 paths. It uses one `stat -c`/`stat -f` per path (three separate invocations were the dominant cost at 10+ paths), with missing paths reported as `type: "missing"`
+- `buildAtomicWriteCommand()` builds the temp-file-plus-`mv` script used by both `replace_in_remote_file` and `write_remote_file` with `atomic: true`; mode/owner come from one `stat` and are copied from the existing file where the platform allows it
+- Remote scripts must not rely on word splitting (`set -- $var`): the remote login shell can be zsh, which does not split unquoted expansions. Parse multi-field output with `${var%% *}` / `${var#* }`
+- The binary guard reads the first 8 KiB with `od -An -v -tx1 -N 8192` (GNU, BSD, and BusyBox) instead of `dd | od`, saving a process per read
 
 ### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`, `src/mcp/fileTools.ts`)
 - `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `read_remote_file`, `replace_in_remote_file`, `grep_remote`, `stat_remote`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
 - Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions, compact-response details, and the active policy)
 - Responses are compact and minified: `ok()` uses `JSON.stringify` and `compactRunResult()` omits echoed input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero counters, and false flags while always keeping `ok`, `exitCode`, and failure `errorKind`/`hint`. `run_command`/`run_on_many` accept `verbose: true` for the full shape.
-- `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
+- `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`/`linked`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
 - `run_on_many` supports `only: 'all' | 'failures'`, `match` (regex; matching stdout lines only), and `stdin`/`tty`/`reuse` parity with `run_command`; the summary `{total, succeeded, failed}` always covers every requested host.
 - Errors are actionable: unknown aliases return `errorKind: 'alias_not_found'` plus up to three `suggestions`; sudo failures classify as `tty` (`tty: true` / `sudo -n`) or `sudo_password` (NOPASSWD / `sudo -n`). Every `failResult` carries an `errorKind`.
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped at 8 KiB stdout + 4 KiB stderr (`headtail`), `cwd=true`. Keep tool descriptions to one short sentence and param descriptions to a few words; put details in `sshya://guide` so `tools/list` stays under ~1,800 tokens.
@@ -95,9 +108,13 @@
 8. **Diagnose**: `sshya doctor --probe --accept-new-host-key` → checks binaries, keys, agent, pool, and reachability
 
 ## Notable Implementation Details
-- `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints)
+- `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints). Ship the whole `dist/` directory: `build.ts` emits content-hashed chunks next to the entry files
+- The published artifact bundles every runtime dependency and has empty `dependencies`; the libraries stay in `devDependencies` for building and tests. Interactive/MCP-only code should stay behind dynamic `import()` so splitting keeps it out of the eager `index.js` graph (the MCP SDK chunk is ~300 KiB and is only loaded by `sshya mcp`)
+- Startup is part of the product for agent loops. Measure with `bun run bench:startup` (10 runs per case, median, isolated `SSHYA_DB` and a throwaway local sshd; nothing under `~/.sshya` or `~/.ssh` is touched)
 - `index.ts` must not read `import.meta.main` directly: Bun's bundler rewrites it into a Bun-only `require` shim that throws under Node. It reads the property dynamically and falls back to comparing `argv[1]` with `import.meta.url`
 - Runtime code must stay Node-compatible (no `Bun.*`, `bun:` imports, or `import.meta.dir`); run `bun run build` before `npm pack` / `npm publish`
+- Startup path: `index.ts` registers commander commands only; every action dynamically imports its command module. Heavy modules stay dynamic at their use site too — `src/lib/prompts` (interactive prompts), `zod` (`src/schema.ts` `loadConnectionSchema`), and the MCP SDK (`createMcpServer`). Bun's bundler hoists *static* external imports into the single `dist/index.js` even when the local module is only reached through `await import()`, so new heavy deps must be imported dynamically inside functions to stay off `--version`/`list`/`run`
+- `src/lib/color.ts`, `src/lib/fuzzy.ts`, and `src/lib/prompts.ts` replace chalk, fuse.js, and inquirer with dependency-free ports. Their `*.test.ts` files compare output against the original libraries (kept in `devDependencies` for that purpose only); keep them in parity when changing behavior, and never import the originals from app code
 - Usage tracking via `lastUsed` timestamps
 - Interactive commands guard on `process.stdin.isTTY`; no-TTY runs fail instead of hanging
 - `run`/`test` default to `BatchMode=yes`, `-T`, and a connect timeout

@@ -1,5 +1,5 @@
 import { spawn, type StdioOptions } from 'child_process';
-import chalk from 'chalk';
+import chalk from '../lib/color';
 import { recordConnectionUsage, type Connection } from '../database';
 import { ByteCapture, defaultMaxOutputBytes, type CaptureMode } from '../helpers/capture';
 import { controlSocketStat, reuseEnabled } from '../helpers/control';
@@ -337,7 +337,7 @@ export async function runConnectionPrompt(
     alias = await selectAlias('Select a connection to run a command on');
   }
 
-  const lookup = resolveAliasForCommand(alias, { json });
+  const lookup = await resolveAliasForCommand(alias, { json });
 
   if (!lookup.ok) {
     if (json) {

@@ -19,8 +19,7 @@
  */
 import { randomUUID } from 'crypto';
 import path from 'path';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
 import { quoteRemotePath, quoteShellArg } from '../helpers/shell';
@@ -154,14 +153,19 @@ export const buildAtomicWriteCommand = (options: AtomicWriteOptions): string => 
  * because a non-root user cannot always chown.
  */
 const preserveMetadataLines = (target: string, modeOverride?: string): string[] => {
-  const mode = modeOverride !== undefined
-    ? `__sshya_mode=${quoteShellArg(modeOverride)}`
-    : `__sshya_mode=$(stat -c '%a' ${target} 2>/dev/null || stat -f '%Lp' ${target} 2>/dev/null)`;
+  // Mode, uid, and gid live in the same inode: read them in one `stat` (two
+  // spawns per write saved, which is measurable because the remote host pays a
+  // process per invocation). GNU `stat -c` and BSD `stat -f` are both tried;
+  // failures are non-fatal because a non-root user cannot always chown.
   return [
-    mode,
+    `__sshya_meta=$(stat -c '%a %u %g' ${target} 2>/dev/null || stat -f '%Lp %u %g' ${target} 2>/dev/null) || __sshya_meta=`,
+    '__sshya_rest=${__sshya_meta#* }',
+    '__sshya_gid=${__sshya_rest#* }',
+    '__sshya_uid=${__sshya_rest%% *}',
+    modeOverride !== undefined
+      ? `__sshya_mode=${quoteShellArg(modeOverride)}`
+      : '__sshya_mode=${__sshya_meta%% *}',
     '[ -n "$__sshya_mode" ] && chmod "$__sshya_mode" "$__sshya_tmp" 2>/dev/null || true',
-    `__sshya_uid=$(stat -c '%u' ${target} 2>/dev/null || stat -f '%u' ${target} 2>/dev/null)`,
-    `__sshya_gid=$(stat -c '%g' ${target} 2>/dev/null || stat -f '%g' ${target} 2>/dev/null)`,
     '[ -n "$__sshya_uid" ] && [ -n "$__sshya_gid" ] && chown "$__sshya_uid:$__sshya_gid" "$__sshya_tmp" 2>/dev/null || true',
   ];
 };
@@ -244,7 +248,10 @@ const fileGuardLines = (variable: string, sentinel: string, binaryKind: string):
   `if [ -d "$${variable}" ]; then printf '${sentinel}\\nkind\\nis_a_directory\\n'; exit 0; fi`,
   `if [ ! -e "$${variable}" ]; then printf '${sentinel}\\nkind\\nnot_found\\n'; exit 0; fi`,
   `if [ ! -r "$${variable}" ]; then printf '${sentinel}\\nkind\\npermission_denied\\n'; exit 0; fi`,
-  `if LC_ALL=C dd if="$${variable}" bs=1024 count=8 2>/dev/null | od -An -v -tx1 | grep -Eqi '(^| )00( |$)'; then printf '${sentinel}\\nkind\\n${binaryKind}\\n'; exit 0; fi`,
+  // `od -N` caps the read at the same 8 KiB that `dd bs=1024 count=8 | od`
+  // produced, without the extra `dd` process. GNU, BSD, and BusyBox od all
+  // accept -N and print the same hex layout.
+  `if LC_ALL=C od -An -v -tx1 -N 8192 "$${variable}" 2>/dev/null | grep -Eqi '(^| )00( |$)'; then printf '${sentinel}\\nkind\\n${binaryKind}\\n'; exit 0; fi`,
 ];
 
 /** Drop an incomplete UTF-8 sequence at the end of a byte slice. */
@@ -375,7 +382,9 @@ const parseTaggedOutput = (
   return { tag, value: value?.trim() };
 };
 
-export const registerFileTools = (server: McpServer, policy: McpPolicy): void => {
+export const registerFileTools = async (server: McpServer, policy: McpPolicy): Promise<void> => {
+  // Interactive/MCP-only dependency: keep zod out of the CLI startup path.
+  const { z } = await import('zod');
   server.registerTool(
     'read_remote_file',
     {
@@ -412,7 +421,10 @@ export const registerFileTools = (server: McpServer, policy: McpPolicy): void =>
         `__sshya_p=${target}`,
         ...fileGuardLines('__sshya_p', sentinel, 'binary_file'),
         `printf '${sentinel}\\nmeta\\n'`,
-        'awk \'END { print NR }\' < "$__sshya_p"',
+        // `sed -n '$='` is the same line count as `awk 'END { print NR }'` for a
+        // final line without a newline, but roughly twice as fast on big files
+        // because it does not split records.
+        'sed -n \'$=\' < "$__sshya_p"',
         `printf '${sentinel}\\n'`,
         `sed -n '${startLine},${endLine}p' < "$__sshya_p" | LC_ALL=C dd bs=4096 count=${ddBlocks} 2>/dev/null`,
       ].join('\n');
@@ -570,10 +582,17 @@ export const registerFileTools = (server: McpServer, policy: McpPolicy): void =>
         `for __sshya_f in ${paths.map(remoteOperand).join(' ')}; do`,
         'if [ ! -e "$__sshya_f" ] && [ ! -L "$__sshya_f" ]; then printf \'%s\\tmissing\\n\' "$__sshya_f"; continue; fi',
         'if [ -L "$__sshya_f" ]; then __sshya_t=symlink; elif [ -d "$__sshya_f" ]; then __sshya_t=directory; elif [ -f "$__sshya_f" ]; then __sshya_t=file; else __sshya_t=other; fi',
-        '__sshya_sz=$(stat -c \'%s\' "$__sshya_f" 2>/dev/null || stat -f \'%z\' "$__sshya_f" 2>/dev/null) || __sshya_sz=-1',
-        '__sshya_mt=$(stat -c \'%Y\' "$__sshya_f" 2>/dev/null || stat -f \'%m\' "$__sshya_f" 2>/dev/null) || __sshya_mt=-1',
-        '__sshya_mode=$(stat -c \'%a\' "$__sshya_f" 2>/dev/null || stat -f \'%Lp\' "$__sshya_f" 2>/dev/null) || __sshya_mode=',
-        'printf \'%s\\t%s\\t%s\\t%s\\t%s\\n\' "$__sshya_f" "$__sshya_t" "$__sshya_sz" "$__sshya_mt" "$__sshya_mode"',
+        // One `stat` per path instead of three: callers routinely batch up to
+        // 50 paths, and every extra invocation is a process on the remote host.
+        // Fields are split with parameter expansion (not `set -- $var`) so this
+        // also works when the remote login shell is zsh, which does not word-split
+        // unquoted expansions.
+        '__sshya_s=$(stat -c \'%s %Y %a\' "$__sshya_f" 2>/dev/null || stat -f \'%z %m %Lp\' "$__sshya_f" 2>/dev/null) || __sshya_s=',
+        '__sshya_rest=${__sshya_s#* }',
+        '__sshya_sz=${__sshya_s%% *}',
+        '__sshya_mt=${__sshya_rest%% *}',
+        '__sshya_mode=${__sshya_rest#* }',
+        'printf \'%s\\t%s\\t%s\\t%s\\t%s\\n\' "$__sshya_f" "$__sshya_t" "${__sshya_sz:--1}" "${__sshya_mt:--1}" "$__sshya_mode"',
         'done',
       ].join('\n');
 
@@ -651,9 +670,13 @@ export const registerFileTools = (server: McpServer, policy: McpPolicy): void =>
         ...fileGuardLines('__sshya_p', sentinel, 'binary_file'),
         '__sshya_size=$(wc -c < "$__sshya_p") || { printf \'' + sentinel + '\\nkind\\npermission_denied\\n\'; exit 0; }',
         `if [ "$__sshya_size" -gt ${MAX_EDIT_FILE_BYTES} ]; then printf '${sentinel}\\nkind\\nfile_too_large\\n'; exit 0; fi`,
-        '__sshya_mode=$(stat -c \'%a\' "$__sshya_p" 2>/dev/null || stat -f \'%Lp\' "$__sshya_p" 2>/dev/null)',
-        '__sshya_uid=$(stat -c \'%u\' "$__sshya_p" 2>/dev/null || stat -f \'%u\' "$__sshya_p" 2>/dev/null)',
-        '__sshya_gid=$(stat -c \'%g\' "$__sshya_p" 2>/dev/null || stat -f \'%g\' "$__sshya_p" 2>/dev/null)',
+        // Single stat for mode/uid/gid; see preserveMetadataLines. Parameter
+        // expansion keeps this correct under zsh login shells too.
+        '__sshya_meta=$(stat -c \'%a %u %g\' "$__sshya_p" 2>/dev/null || stat -f \'%Lp %u %g\' "$__sshya_p" 2>/dev/null) || __sshya_meta=',
+        '__sshya_rest=${__sshya_meta#* }',
+        '__sshya_mode=${__sshya_meta%% *}',
+        '__sshya_uid=${__sshya_rest%% *}',
+        '__sshya_gid=${__sshya_rest#* }',
         '__sshya_ck=$(cksum < "$__sshya_p") || __sshya_ck=',
         `printf '${sentinel}\\nmeta\\n%s\\n%s\\n%s\\n%s\\n' "$__sshya_mode" "$__sshya_uid" "$__sshya_gid" "$__sshya_ck"`,
         `printf '${sentinel}\\n'`,
