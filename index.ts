@@ -314,6 +314,16 @@ program
   });
 
 program
+  .command('reports [action] [id]')
+  .description('Review problem reports filed by agents (list, show <id>, open <id>, export, clear [id])')
+  .option('--open', 'With open: also launch the prefilled GitHub issue in a browser')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (action: string | undefined, id: string | undefined, options: { json?: boolean; open?: boolean }) => {
+    const { reportsCommand } = await import('./src/connection/reports');
+    return reportsCommand(action, id, options);
+  });
+
+program
   .command('pool [action] [alias]')
   .description('Inspect or close pooled SSH connections (list, close)')
   .option('--all', 'Close every pooled connection (with close)')
@@ -385,11 +395,13 @@ program
   .description('Start the sshya MCP server on stdio for agent integrations')
   .option('--aliases <patterns>', 'Only expose these aliases (comma-separated, supports simple globs like stg-*)')
   .option('--read-only', 'Expose read-only tools only: no store mutations, remote file writes, or uploads')
-  .action(async (options: { aliases?: string; readOnly?: boolean }) => {
+  .option('--feedback', 'Opt in to the report_issue tool so agents can report sshya problems (saved locally)')
+  .action(async (options: { aliases?: string; readOnly?: boolean; feedback?: boolean }) => {
     const { runMcpServer } = await import('./src/mcp/server');
     await runMcpServer({
       aliases: options.aliases?.trim() ? options.aliases : undefined,
       readOnly: options.readOnly === true ? true : undefined,
+      feedback: options.feedback === true ? true : undefined,
     });
   });
 
