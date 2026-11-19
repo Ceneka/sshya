@@ -267,7 +267,11 @@ export async function doctorCommand(options: DoctorOptions = {}): Promise<void> 
   const json = jsonEnabled(options.json);
   const db = checkDatabase();
   const checks: DoctorCheck[] = [
-    { id: 'runtime', status: 'info', summary: `Bun ${process.versions.bun ?? 'unknown'} on ${process.platform}/${process.arch}` },
+    {
+      id: 'runtime',
+      status: 'info',
+      summary: `${process.versions.bun ? 'Bun' : 'Node'} ${process.versions.bun ?? process.versions.node} on ${process.platform}/${process.arch}`,
+    },
     checkSsh(),
     checkScp(),
     db.check,

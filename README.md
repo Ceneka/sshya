@@ -95,17 +95,54 @@ Notes for scripting:
 | `SSHYA_HOST_KEY_CHECKING` | ssh default | `strict`, `accept-new`, or `ask` |
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
 
-### MCP server
+### MCP client setup
 
 `sshya mcp` starts a stdio MCP server that exposes the same store and operations
-to MCP-capable agents:
+to MCP-capable agents. The published package is plain Node.js, so
+`npx -y sshya mcp` works even on machines without Bun.
+
+Claude Code:
+
+```bash
+claude mcp add sshya -- npx -y sshya mcp
+```
+
+Claude Desktop / Cursor (`mcpServers` config):
 
 ```json
 {
   "mcpServers": {
     "sshya": {
-      "command": "sshya",
-      "args": ["mcp"]
+      "command": "npx",
+      "args": ["-y", "sshya", "mcp"]
+    }
+  }
+}
+```
+
+Bun alternative:
+
+```json
+{
+  "mcpServers": {
+    "sshya": {
+      "command": "bunx",
+      "args": ["sshya", "mcp"]
+    }
+  }
+}
+```
+
+If sshya is installed globally, `"command": "sshya", "args": ["mcp"]` also
+works. Add an `env` block with `SSHYA_DB` to isolate an agent workspace:
+
+```json
+{
+  "mcpServers": {
+    "sshya": {
+      "command": "npx",
+      "args": ["-y", "sshya", "mcp"],
+      "env": { "SSHYA_DB": "/home/me/.sshya/agent-sshm.json" }
     }
   }
 }
@@ -126,8 +163,11 @@ without a local scp target and supports `encoding: base64`, `append`, and
 
 
 ## Technology Stack
-- **Runtime:** Bun
+- **Runtime:** Node.js >= 20 for the published CLI (`dist/`); Bun >= 1.2 for
+  development, tests, and building.
 - **Language:** TypeScript
+- **Build:** `bun build --target node` via `scripts/build.ts`; local modules are
+  bundled into two files and npm dependencies stay external.
 - **Dependencies:**
     - `commander`: For command-line argument parsing.
     - `inquirer`: For interactive prompts.
@@ -145,17 +185,32 @@ The MCP server lives in `src/mcp/server.ts`. It reuses the same database and com
 
 ## Installation
 
-Requires [Bun](https://bun.sh) >= 1.2.0, since the published entrypoints are TypeScript executed by Bun.
+The published package is plain ESM JavaScript with a `#!/usr/bin/env node`
+shebang, so it runs on **Node.js >= 20** without Bun.
 
 ```bash
-bun add -g sshya     # installs the `sshya` and `s` commands
+npm install -g sshya       # installs the `sshya` and `s` commands
+npx -y sshya --help        # or run it without installing
 ```
 
-Or with npm:
+Bun users can install the same package with `bun add -g sshya`, or run it with
+`bunx sshya --help`.
+
+### Development
+
+A source checkout uses Bun for the developer workflow; the build output targets
+Node:
 
 ```bash
-npm install -g sshya
+bun install
+bun run typecheck
+bun test
+bun run build              # writes dist/index.js and dist/s.js for Node
 ```
+
+`bun run build` bundles local modules with `bun build --target node`, keeps npm
+dependencies external, and rewrites the two shebangs to `#!/usr/bin/env node`.
+`npm publish` runs typecheck, tests, and the build via `prepublishOnly`.
 
 ## Connecting
 
