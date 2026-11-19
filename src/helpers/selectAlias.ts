@@ -1,4 +1,5 @@
 import chalk from "../lib/color";
+import { fuzzySearch } from "../lib/fuzzy";
 import { getConnectionByAlias, getConnections, type Connection } from "../database";
 import { jsonEnabled } from "../output";
 import { enableEscapeExit } from "./escExit";
@@ -10,9 +11,9 @@ const getAliasChoices = () => {
 };
 
 /**
- * Fuzzy matching loads Fuse.js on first use. It is only reachable from typo
- * suggestions and the interactive picker, so exact alias lookups and agent
- * `--json` calls never evaluate the library.
+ * Fuzzy matching uses `src/lib/fuzzy.ts`, a dependency-free port of the
+ * Fuse.js 7 scoring sshya used before (keys: ['name'], threshold 0.4), so
+ * suggestions and picker ordering are unchanged.
  */
 const searchAliasChoices = async (term: string) => {
     const choices = getAliasChoices();
@@ -20,13 +21,7 @@ const searchAliasChoices = async (term: string) => {
         return choices;
     }
 
-    const { default: Fuse } = await import('fuse.js');
-    const fuse = new Fuse(choices, {
-        keys: ['name'],
-        threshold: 0.4,
-    });
-
-    return fuse.search(term).map(r => r.item);
+    return fuzzySearch(choices, term, choice => choice.name, { threshold: 0.4 });
 };
 
 export const findAliasBySearchTerm = async (term: string): Promise<string | undefined> => {
