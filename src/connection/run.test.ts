@@ -47,6 +47,8 @@ const cliEnv = (env: Record<string, string>): NodeJS.ProcessEnv => {
     ...env,
   };
   delete childEnv.SSHYA_JSON;
+  // Keep the default-cap tests independent of the developer's shell.
+  delete childEnv.SSHYA_MAX_OUTPUT;
   return childEnv;
 };
 
@@ -93,6 +95,7 @@ describe('executeSshCommand', () => {
     expect(result.reused).toBe(false);
     expect(result.timeoutMs).toBeNull();
     expect(result.errorKind).toBeUndefined();
+    expect(result.truncation).toBeUndefined();
   });
 
   test('reports the exit code and classifies auth failures', async () => {
@@ -131,6 +134,50 @@ describe('executeSshCommand', () => {
     });
     expect(tail.stdoutTruncated).toBe(true);
     expect(tail.stdout).toContain('truncated: showing last 128 B');
+  });
+
+  test('keeps both ends with headtail and reports the mode', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript(
+      'big-lines.sh',
+      "awk 'BEGIN { for (i = 0; i < 500; i++) printf \"line-%03d\\n\", i }'",
+    );
+
+    const result = await executeSshCommand(connection, 'big', {
+      reuse: false,
+      maxOutputBytes: 256,
+      outputMode: 'headtail',
+    });
+
+    expect(result.stdoutBytes).toBe(4500);
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stderrTruncated).toBe(false);
+    expect(result.truncation).toBe('headtail');
+    expect(result.stdout).toContain('line-000');
+    expect(result.stdout).toContain('line-499');
+    expect(result.stdout).toContain('[... sshya:');
+    expect(result.stdout).not.toContain('line-250');
+  });
+
+  test('applies a separate stderr cap and reports stderr truncation', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript(
+      'noisy-stderr.sh',
+      "awk 'BEGIN { for (i = 0; i < 2000; i++) printf \"e\" > \"/dev/stderr\" }'; printf 'ok\\n'",
+    );
+
+    const result = await executeSshCommand(connection, 'noisy', {
+      reuse: false,
+      maxOutputBytes: 512,
+      stderrMaxOutputBytes: 64,
+      outputMode: 'headtail',
+    });
+
+    expect(result.stdout).toBe('ok\n');
+    expect(result.stdoutTruncated).toBe(false);
+    expect(result.stderrBytes).toBe(2000);
+    expect(result.stderrTruncated).toBe(true);
+    expect(result.truncation).toBe('headtail');
+    expect(result.stderr).toContain('[... sshya: 0 lines / 1.9 KiB omitted ...]');
+    expect(result.stderr.length).toBeLessThan(200);
   });
 
   test('kills the process and reports a timeout', async () => {
@@ -279,9 +326,74 @@ describe('run CLI for agents', () => {
     );
 
     expect(result.status).toBe(0);
-    const payload = JSON.parse(result.stdout) as { ok: boolean; timeoutMs: number | null };
+    const payload = JSON.parse(result.stdout) as { ok: boolean; timeoutMs: number | null; truncation?: string };
     expect(payload.ok).toBe(true);
     expect(payload.timeoutMs).toBe(DEFAULT_RUN_TIMEOUT_MS);
+    expect(payload.truncation).toBeUndefined();
+  });
+
+  test('--json caps large output at 16 KiB head+tail by default', () => {
+    const ssh = writeScript(
+      'cli-headtail.sh',
+      "awk 'BEGIN { for (i = 0; i < 20000; i++) printf \"x\" }'",
+    );
+
+    const result = runCli(
+      ['run', 'prod-api', '--json', '--no-reuse', '--', 'big'],
+      undefined,
+      { SSHYA_SSH_BIN: ssh, SSHYA_DB: writeCliDb() },
+    );
+
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      stdout: string;
+      stdoutBytes: number;
+      stdoutTruncated: boolean;
+      truncation?: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.stdoutBytes).toBe(20000);
+    expect(payload.stdoutTruncated).toBe(true);
+    expect(payload.truncation).toBe('headtail');
+    expect(payload.stdout.startsWith('x'.repeat(64))).toBe(true);
+    expect(payload.stdout.endsWith('x'.repeat(64))).toBe(true);
+    expect(payload.stdout).toContain('[... sshya:');
+    expect(payload.stdout.length).toBeLessThan(20000);
+  });
+
+  test('--truncate tail and the deprecated --tail alias keep the end', () => {
+    const ssh = writeScript(
+      'cli-tail.sh',
+      "awk 'BEGIN { for (i = 0; i < 20000; i++) printf \"y\" }'",
+    );
+
+    for (const modeArgs of [['--truncate', 'tail'], ['--tail']]) {
+      const result = runCli(
+        ['run', 'prod-api', '--json', '--no-reuse', '--max-output', '64', ...modeArgs, '--', 'big'],
+        undefined,
+        { SSHYA_SSH_BIN: ssh, SSHYA_DB: writeCliDb() },
+      );
+
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout) as { stdout: string; truncation?: string };
+      expect(payload.truncation).toBe('tail');
+      expect(payload.stdout).toContain('truncated: showing last 64 B');
+    }
+  });
+
+  test('rejects an invalid --truncate value', () => {
+    const ssh = writeScript('cli-unused-truncate.sh', 'exit 0');
+
+    const result = runCli(
+      ['run', 'prod-api', '--json', '--no-reuse', '--truncate', 'middle', '--', 'uptime'],
+      undefined,
+      { SSHYA_SSH_BIN: ssh, SSHYA_DB: writeCliDb() },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('head, tail, or headtail');
+    expect(result.stdout).toBe('');
   });
 
   test('forwards piped stdin to the remote command', () => {

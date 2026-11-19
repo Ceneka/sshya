@@ -26,10 +26,14 @@ sshya is designed for agents that call it one command at a time:
   WAN); later calls typically take 5-20 ms and report `"reused": true`. The
   master expires after 5 minutes (`SSHYA_CONTROL_PERSIST`), or immediately with
   `sshya pool close <alias>`.
-- **Bounded output.** stdout and stderr are capped at 64 KiB per stream by
-  default. Every JSON result reports `stdoutBytes`, `stderrBytes`, line counts,
-  and `stdoutTruncated`/`stderrTruncated`; large streams get a visible marker.
-  Use `--max-output 256k` or `--tail` when needed.
+- **Bounded output.** In `--json` mode stdout and stderr are capped at 16 KiB
+  per stream by default (`SSHYA_MAX_OUTPUT` or `--max-output` overrides it).
+  The cap keeps the first half and the last half (`headtail`, cuts prefer
+  newline boundaries); `--truncate head|tail|headtail` picks another cut. Every
+  JSON result reports `stdoutBytes`, `stderrBytes`, line counts,
+  `stdoutTruncated`/`stderrTruncated`, and, only when something was cut,
+  `truncation`. Non-JSON runs stream stdout untouched. The MCP tools default to
+  8 KiB stdout + 4 KiB stderr in `headtail` mode.
 - **Actionable failures.** JSON results include a stable `errorKind` (`auth`,
   `host-key`, `dns`, `refused`, `timeout`, `network`, `remote-permission`, ...)
   and a `hint` with the concrete next step.
@@ -91,7 +95,7 @@ Notes for scripting:
 | `SSHYA_REUSE` | on | `0` disables ControlMaster pooling |
 | `SSHYA_CONTROL_PERSIST` | `300` | Seconds a pooled master stays alive |
 | `SSHYA_CONTROL_DIR` | `$XDG_RUNTIME_DIR/sshya-<uid>/pool` | Socket directory |
-| `SSHYA_MAX_OUTPUT` | `65536` | Default per-stream capture cap (supports `64k`) |
+| `SSHYA_MAX_OUTPUT` | `16384` | Default CLI/JSON per-stream capture cap (supports `64k`); MCP caps are separate |
 | `SSHYA_HOST_KEY_CHECKING` | ssh default | `strict`, `accept-new`, or `ask` |
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
 | `SSHYA_MCP_ALLOW` | unset | Alias allowlist for `sshya mcp` (comma-separated, supports `*`/`?` globs) |
@@ -159,10 +163,14 @@ recipes, and the active policy).
 
 `run_command` returns a superset of the old result (`ok`, `stdout`, `stderr`,
 `exitCode`, `timedOut`, `durationMs`, `reused`, byte counts, truncation flags,
-`errorKind`, `hint`). `run_on_many` fans one command out to up to 50 aliases with
-bounded concurrency. `write_remote_file` pipes bytes over SSH, so it works
-without a local scp target and supports `encoding: base64`, `append`, and
-`mode`. Neither tool allocates a TTY unless asked.
+`truncation`, `errorKind`, `hint`). Output defaults to 8 KiB stdout + 4 KiB
+stderr in `headtail` mode; `maxOutputBytes` raises the stdout cap, and
+`truncate: "head" | "tail" | "headtail"` chooses which end survives (`tail: true`
+is still accepted as a deprecated alias). Narrow large logs with `grep`,
+`sed -n`, or `tail -n` instead of raising the cap. `run_on_many` fans one command
+out to up to 50 aliases with bounded concurrency. `write_remote_file` pipes bytes
+over SSH, so it works without a local scp target and supports `encoding: base64`,
+`append`, and `mode`. Neither tool allocates a TTY unless asked.
 
 ### Restricting the MCP server
 
@@ -224,7 +232,7 @@ and `copy_file` downloads still write local files at the caller-chosen path.
 ## Implementation Details
 The main application logic is in `index.ts`. SSH arguments are built in-process and passed directly to your system `ssh` binary, avoiding fragile shell string parsing. `src/helpers/ssh.ts` is the single place that assembles key, port, TTY, batch-mode, keepalive, host-key, pooling, and remote-command arguments, so the CLI, JSON output, and MCP tools stay consistent.
 
-Agent-facing behavior lives in three small helpers: `src/helpers/control.ts` (ControlMaster socket paths and lifecycle), `src/helpers/capture.ts` (bounded, UTF-8-safe stream capture with truncation metadata), and `src/helpers/errors.ts` (stable error classes plus actionable hints). `src/connection/run.ts` is the one-shot executor used by both `sshya run` and the MCP `run_command`/`run_on_many` tools.
+Agent-facing behavior lives in three small helpers: `src/helpers/control.ts` (ControlMaster socket paths and lifecycle), `src/helpers/capture.ts` (bounded, UTF-8-safe stream capture with head/tail/head+tail truncation metadata), and `src/helpers/errors.ts` (stable error classes plus actionable hints). `src/connection/run.ts` is the one-shot executor used by both `sshya run` and the MCP `run_command`/`run_on_many` tools.
 
 The MCP server lives in `src/mcp/server.ts`. It reuses the same database and command helpers as the CLI, writes protocol messages to stdout only, and keeps diagnostics off the protocol channel. The connection store can be redirected with `SSHYA_DB`.
 
