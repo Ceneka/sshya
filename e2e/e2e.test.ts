@@ -447,7 +447,7 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
       test('caps large output and keeps either the head or the tail', () => {
         const base = isolation();
         const headResult = runCli(variant, base, [
-          'run', 'alpha', '--json', '--max-output', '4k', '--', 'seq 1 2000',
+          'run', 'alpha', '--json', '--max-output', '4k', '--truncate', 'head', '--', 'seq 1 2000',
         ]);
         expect(headResult.status).toBe(0);
         const head = parseJson<RunPayload>(headResult, 'run head');
@@ -467,6 +467,17 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
         expect(tail.stdoutTruncated).toBe(true);
         expect(tail.stdout).toContain('truncated: showing last');
         expect(tail.stdout).toContain('2000');
+
+        // Default JSON mode keeps both ends with a single omission marker.
+        const bothResult = runCli(variant, base, [
+          'run', 'alpha', '--json', '--max-output', '4k', '--', 'seq 1 2000',
+        ]);
+        expect(bothResult.status).toBe(0);
+        const both = parseJson<RunPayload>(bothResult, 'run headtail');
+        expect(both.stdoutTruncated).toBe(true);
+        expect(both.stdout.startsWith('1\n2\n')).toBe(true);
+        expect(both.stdout).toContain('2000');
+        expect(both.stdout).toContain('omitted');
       }, 60_000);
 
       test('keeps UTF-8 code points intact at both truncation boundaries', () => {
@@ -474,7 +485,7 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
         const command = "yes '€' | head -n 2000";
 
         const headResult = runCli(variant, base, [
-          'run', 'alpha', '--json', '--max-output', '10', '--', command,
+          'run', 'alpha', '--json', '--max-output', '10', '--truncate', 'head', '--', command,
         ]);
         expect(headResult.status).toBe(0);
         const head = parseJson<RunPayload>(headResult, 'run utf8 head');
