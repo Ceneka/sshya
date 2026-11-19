@@ -16,46 +16,60 @@
       "metadataTokens": 18
     },
     {
-      "name": "run_command: 64KiB log, cap 64KiB",
+      "name": "run_command: 64KiB log, MCP default (8KiB headtail)",
       "calls": 1,
-      "rawWireChars": 70043,
-      "textChars": 67194,
-      "textTokens": 22577,
-      "minifiedChars": 67194,
-      "minifiedTokens": 22577,
+      "rawWireChars": 8794,
+      "textChars": 8359,
+      "textTokens": 2818,
+      "minifiedChars": 8359,
+      "minifiedTokens": 2818,
+      "compactChars": 8319,
+      "compactTokens": 2805,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 70
+    },
+    {
+      "name": "run_command: 64KiB log, 64KiB head (old default)",
+      "calls": 1,
+      "rawWireChars": 70067,
+      "textChars": 67214,
+      "textTokens": 22583,
+      "minifiedChars": 67214,
+      "minifiedTokens": 22583,
       "compactChars": 67178,
       "compactTokens": 22571,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 250
+      "metadataTokens": 256
     },
     {
-      "name": "run_command: 64KiB log, cap 16KiB",
+      "name": "run_command: 64KiB log, cap 64KiB headtail",
       "calls": 1,
-      "rawWireChars": 17711,
-      "textChars": 16929,
-      "textTokens": 5723,
-      "minifiedChars": 16929,
-      "minifiedTokens": 5723,
-      "compactChars": 16913,
-      "compactTokens": 5717,
+      "rawWireChars": 69578,
+      "textChars": 66738,
+      "textTokens": 22425,
+      "minifiedChars": 66738,
+      "minifiedTokens": 22425,
+      "compactChars": 66698,
+      "compactTokens": 22412,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 90
+      "metadataTokens": 255
     },
     {
-      "name": "run_command: 64KiB log, cap 8KiB",
+      "name": "run_command: 64KiB log, cap 16KiB headtail",
       "calls": 1,
-      "rawWireChars": 8984,
-      "textChars": 8549,
-      "textTokens": 2896,
-      "minifiedChars": 8549,
-      "minifiedTokens": 2896,
-      "compactChars": 8533,
-      "compactTokens": 2890,
+      "rawWireChars": 17335,
+      "textChars": 16562,
+      "textTokens": 5574,
+      "minifiedChars": 16562,
+      "minifiedTokens": 5574,
+      "compactChars": 16522,
+      "compactTokens": 5561,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 64
+      "metadataTokens": 96
     },
     {
       "name": "run_on_many: 10 hosts, 1 failure",
@@ -72,9 +86,79 @@
       "metadataTokens": 440
     },
     {
+      "name": "run_on_many: 10 hosts, 1 error (all results)",
+      "calls": 1,
+      "rawWireChars": 847,
+      "textChars": 632,
+      "textTokens": 214,
+      "minifiedChars": 632,
+      "minifiedTokens": 214,
+      "compactChars": 464,
+      "compactTokens": 153,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 214
+    },
+    {
+      "name": "run_on_many: 10 hosts, 1 error, only=failures",
+      "calls": 1,
+      "rawWireChars": 158,
+      "textChars": 73,
+      "textTokens": 23,
+      "minifiedChars": 73,
+      "minifiedTokens": 23,
+      "compactChars": 35,
+      "compactTokens": 12,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 23
+    },
+    {
+      "name": "run_on_many: 10 hosts, 1 error, match [1-9]",
+      "calls": 1,
+      "rawWireChars": 223,
+      "textChars": 126,
+      "textTokens": 42,
+      "minifiedChars": 126,
+      "minifiedTokens": 42,
+      "compactChars": 75,
+      "compactTokens": 26,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 42
+    },
+    {
+      "name": "run_on_many: 50 hosts, all active (all results)",
+      "calls": 1,
+      "rawWireChars": 3858,
+      "textChars": 3122,
+      "textTokens": 974,
+      "minifiedChars": 3122,
+      "minifiedTokens": 974,
+      "compactChars": 2434,
+      "compactTokens": 713,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 974
+    },
+    {
+      "name": "run_on_many: 50 hosts, all active, only=failures",
+      "calls": 1,
+      "rawWireChars": 159,
+      "textChars": 73,
+      "textTokens": 23,
+      "minifiedChars": 73,
+      "minifiedTokens": 23,
+      "compactChars": 35,
+      "compactTokens": 12,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 23
+    },
+    {
       "name": "test_connection: success",
       "calls": 1,
-      "rawWireChars": 121,
+      "rawWireChars": 122,
       "textChars": 40,
       "textTokens": 15,
       "minifiedChars": 40,
@@ -88,44 +172,44 @@
     {
       "name": "run_command: auth failure",
       "calls": 1,
-      "rawWireChars": 503,
-      "textChars": 389,
-      "textTokens": 120,
-      "minifiedChars": 389,
-      "minifiedTokens": 120,
-      "compactChars": 369,
-      "compactTokens": 114,
+      "rawWireChars": 471,
+      "textChars": 356,
+      "textTokens": 99,
+      "minifiedChars": 356,
+      "minifiedTokens": 99,
+      "compactChars": 336,
+      "compactTokens": 93,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 83
+      "metadataTokens": 81
     },
     {
       "name": "run_command: host key failure",
       "calls": 1,
-      "rawWireChars": 499,
-      "textChars": 385,
-      "textTokens": 120,
-      "minifiedChars": 385,
-      "minifiedTokens": 120,
-      "compactChars": 365,
-      "compactTokens": 115,
+      "rawWireChars": 467,
+      "textChars": 352,
+      "textTokens": 99,
+      "minifiedChars": 352,
+      "minifiedTokens": 99,
+      "compactChars": 332,
+      "compactTokens": 94,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 94
+      "metadataTokens": 92
     },
     {
       "name": "run_command: timeout",
       "calls": 1,
-      "rawWireChars": 537,
-      "textChars": 412,
-      "textTokens": 133,
-      "minifiedChars": 412,
-      "minifiedTokens": 133,
-      "compactChars": 340,
-      "compactTokens": 112,
+      "rawWireChars": 505,
+      "textChars": 379,
+      "textTokens": 112,
+      "minifiedChars": 379,
+      "minifiedTokens": 112,
+      "compactChars": 307,
+      "compactTokens": 91,
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
-      "metadataTokens": 96
+      "metadataTokens": 94
     },
     {
       "name": "list_connections: 5",
@@ -196,40 +280,86 @@
       "hasStructuredContent": false,
       "contentDuplicatesStructured": false,
       "metadataTokens": 20
+    },
+    {
+      "name": "read_remote_file: 40 lines of 20KiB config",
+      "calls": 1,
+      "rawWireChars": 1513,
+      "textChars": 1341,
+      "textTokens": 492,
+      "minifiedChars": 1341,
+      "minifiedTokens": 492,
+      "compactChars": 1341,
+      "compactTokens": 492,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 106
+    },
+    {
+      "name": "grep_remote: 1 match in 40 site files",
+      "calls": 1,
+      "rawWireChars": 172,
+      "textChars": 90,
+      "textTokens": 27,
+      "minifiedChars": 90,
+      "minifiedTokens": 27,
+      "compactChars": 90,
+      "compactTokens": 27,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 14
+    },
+    {
+      "name": "stat_remote: 3 paths",
+      "calls": 1,
+      "rawWireChars": 363,
+      "textChars": 243,
+      "textTokens": 73,
+      "minifiedChars": 243,
+      "minifiedTokens": 73,
+      "compactChars": 243,
+      "compactTokens": 73,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 73
+    },
+    {
+      "name": "replace_in_remote_file: one line in 20KiB config",
+      "calls": 1,
+      "rawWireChars": 382,
+      "textChars": 284,
+      "textTokens": 89,
+      "minifiedChars": 284,
+      "minifiedTokens": 89,
+      "compactChars": 284,
+      "compactTokens": 89,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 35
+    },
+    {
+      "name": "write_remote_file: atomic=true",
+      "calls": 1,
+      "rawWireChars": 168,
+      "textChars": 80,
+      "textTokens": 24,
+      "minifiedChars": 80,
+      "minifiedTokens": 24,
+      "compactChars": 80,
+      "compactTokens": 24,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 24
     }
   ],
   "totals": {
-    "textTokens": 34339,
-    "minifiedTokens": 34339,
+    "textTokens": 58461,
+    "minifiedTokens": 58461,
     "minifiedSavingsPct": 0,
-    "compactTokens": 32645,
-    "compactSavingsPct": 4.9
+    "compactTokens": 56374,
+    "compactSavingsPct": 3.6
   },
   "listConnections50Fields": [
-    {
-      "field": "sshArgs",
-      "chars": 259,
-      "tokens": 54,
-      "shareOfResponse": "4.6%"
-    },
-    {
-      "field": "sshCommand",
-      "chars": 262,
-      "tokens": 54,
-      "shareOfResponse": "4.7%"
-    },
-    {
-      "field": "interactiveSshCommand",
-      "chars": 273,
-      "tokens": 56,
-      "shareOfResponse": "4.9%"
-    },
-    {
-      "field": "id",
-      "chars": 254,
-      "tokens": 52,
-      "shareOfResponse": "4.5%"
-    },
     {
       "field": "alias",
       "chars": 407,
@@ -237,40 +367,22 @@
       "shareOfResponse": "7.3%"
     },
     {
-      "field": "user",
-      "chars": 256,
-      "tokens": 52,
-      "shareOfResponse": "4.6%"
+      "field": "target",
+      "chars": 1008,
+      "tokens": 403,
+      "shareOfResponse": "18.0%"
     },
     {
-      "field": "host",
-      "chars": 256,
-      "tokens": 53,
-      "shareOfResponse": "4.6%"
+      "field": "keyPath",
+      "chars": 1559,
+      "tokens": 554,
+      "shareOfResponse": "27.8%"
     },
     {
-      "field": "port",
-      "chars": 256,
-      "tokens": 53,
-      "shareOfResponse": "4.6%"
-    },
-    {
-      "field": "key_path",
-      "chars": 260,
-      "tokens": 54,
-      "shareOfResponse": "4.6%"
-    },
-    {
-      "field": "remote_path",
-      "chars": 263,
-      "tokens": 54,
-      "shareOfResponse": "4.7%"
-    },
-    {
-      "field": "lastUsed",
-      "chars": 260,
-      "tokens": 54,
-      "shareOfResponse": "4.6%"
+      "field": "remotePath",
+      "chars": 562,
+      "tokens": 204,
+      "shareOfResponse": "10.0%"
     }
   ],
   "runCommandFields": [
@@ -353,7 +465,10 @@
     "duplicateChars": 0
   },
   "findings": {
-    "defaultCapBytes": 65536,
+    "defaultCapBytes": 8192,
+    "defaultMode": "headtail",
+    "oldShapeTokens": 22583,
+    "defaultTokens": 2818,
     "bytesPerTokenLog": 3
   }
 }

@@ -609,29 +609,199 @@ non-draining fake ssh and a 256 KiB payload.
 
 ---
 
-## 7. Caveats
+## 7. Final (all rounds merged)
+
+Measured on 2026-11-19, same machine, tokenizer, harness, and isolated store as
+§1–§6, on the tree that merges every round: compact/minified responses, lean
+`list_connections`, `run_on_many` filters and param parity, actionable errors,
+8 KiB head+tail truncation, and the five structured file tools
+(`read_remote_file`, `replace_in_remote_file`, `grep_remote`, `stat_remote`,
+and `write_remote_file atomic: true`). **Before** is the original 0.6.0
+measurement from §1/§2/§4 — not a projection. **Final** is
+`bench/results/*.json` from `./run-all.sh` on this tree.
+
+The file-tool rows run the fake ssh with `FAKE_SSH_EXEC=1`: the last argv (the
+remote command) is executed locally through `sh -c`, so `sed`/`awk`/`grep`/
+`stat`/`cksum` see real files under the bench temp dir. That measures payload
+size, which is what this report is about, not transport. Correctness of the
+same tools against a real local sshd (real login shell, real atomic rename,
+conflict detection, readonly policy) is covered by `SSHYA_E2E=1 ./e2e/run.sh`.
+No remote host was contacted; `~/.sshya` and `~/.ssh` were not read or written.
+
+### Fixed context
+
+| Component | Before chars | Before tok | Final chars | Final tok | Change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `initialize.instructions` | 727 | **146** | 253 | **53** | −63.7% |
+| `tools/list` (12 → 16 definitions) | 11,566 | **2,592** | 10,262 | **2,463** | −5.0% |
+| Always-on total (instructions + tools) | 12,293 | **2,738** | 10,515 | **2,516** | **−8.1%** |
+| `resources/list` (names only) | 344 | 76 | 400 | 86 | +13.2% |
+| `sshya://guide` (on demand) | 1,734 | 454 | 4,443 | **1,121** | +147% |
+| Instructions + tools + guide | 14,027 | **3,192** | 14,958 | **3,637** | +13.9% |
+
+The four new tools cost 790 tok (`read_remote_file` 221, `replace_in_remote_file`
+218, `grep_remote` 211, `stat_remote` 140). The list is still 129 tok below the
+original 12-tool list because the description diet on the older tools saved more
+than the new schemas add. The always-on total is 222 tok lower than 0.6.0 with
+four more capabilities.
+
+The on-demand guide is the one number that grew: file-tool semantics, the
+readonly rule, and the compact-response contract moved there, so an agent that
+reads it pays 667 tok more than in 0.6.0. It is not always-on; the break-even is
+one avoided retry.
+
+### Per-call responses
+
+| Scenario | Before tok | Final tok | Saving |
+| --- | ---: | ---: | ---: |
+| `run_command` — `uptime`, tiny stdout | 195 | **59** | 69.7% |
+| `run_command` — 64 KiB log, **shipped default** (8 KiB head+tail) | 22,710 | **2,818** | **87.6%** |
+| `run_command` — same log, `maxOutputBytes: 65536`, head-only (old shape) | 22,710 | 22,583 | 0.6% |
+| `run_command` — same log, 64 KiB head+tail (raised cap) | — | 22,425 | — |
+| `run_command` — same log, 16 KiB head+tail | 5,856 | 5,574 | 4.8% |
+| `test_connection` — success | 52 | **15** | 71.2% |
+| `run_command` — auth failure | 249 | 99 | 60.2% |
+| `run_command` — host-key failure | 259 | 99 | 61.8% |
+| `run_command` — timeout | 241 | 112 | 53.5% |
+| `run_command` — alias not found | 19 | 20 | −5.3% |
+| `list_connections` — 5 | 1,356 | **183** | 86.5% |
+| `list_connections` — 50 | 13,506 | **1,803** | 86.7% |
+| `get_connection` — 1 | 276 | 227 | 17.8% |
+| `write_remote_file` — success (whole-file) | 64 | **23** | 64.1% |
+| `write_remote_file` — `atomic: true` | — | 24 | — |
+| `read_remote_file` — 40 lines of a 20 KiB config | — | 492 | — |
+| `grep_remote` — 1 match in 40 config files | — | 27 | — |
+| `stat_remote` — 3 paths | — | 73 | — |
+| `replace_in_remote_file` — one line (with diff) | — | 89 | — |
+
+The 64 KiB log is now bounded by the 8 KiB head+tail default: **2,818 tok
+instead of 22,710** for the same call, and the two ends (startup errors and the
+latest failures) are both present. Raising `maxOutputBytes` restores the old
+cost: the cap, not the mode, dominates once it is raised.
+
+`list_connections` is 36 tok/connection. The four surviving fields are
+`alias` (7.3% of the 50-host response), `target` (18.0%), `keyPath` (27.8%),
+and `remotePath` (10.0%); the rest is JSON keys and punctuation. `sshArgs`,
+`sshCommand`, and `interactiveSshCommand` are only in `get_connection` (227 tok)
+and `print_ssh_command` (79 tok of tool context).
+
+The file tools are a new capability, so most rows have no 0.6.0 counterpart: the
+`sed -n`/`cat`/`grep`/`ls -l` equivalents were either in the 4,525-tok range read
+or in the 12,322-tok edit task below. `read_remote_file` output is payload-bound
+(492 tok for 40 real config lines); the gain is the schema, `totalLines`,
+numbered lines, binary refusal, and no shell quoting.
+
+### Fleet filters
+
+| Query | Before (all results) | Final all | Final `only: "failures"` | Final `match` |
+| --- | ---: | ---: | ---: | ---: |
+| 10 hosts, one error among zeros | 1,814 | 214 | 23 | **42** (`match: "[1-9]"`) |
+| 50 hosts, all `active` | 8,294 | 974 | **23** | — |
+
+Filters shape the reply; every requested host is still executed (and still
+counted in `summary`). The 10-host error hunt is 42 tok, a 97.7% saving; the
+50-host fleet check with nothing to report is 23 tok, a 99.7% saving.
+
+### Agent tasks
+
+Same eight tasks as §4, re-run with the shipped tools. "Before" is §4
+(0.6.0); the edit and range-read tasks now use the structured file tools.
+
+| Task | Calls (before → final) | Before tok | Final tok | Saving |
+| --- | --- | ---: | ---: | ---: |
+| Check disk on 5 hosts (discover + fan out) | 2 → 2 | 2,315 | 407 | 82.4% |
+| Tail a log (last 50 lines) | 1 → 1 | 5,476 | 2,818 | 48.5% |
+| **Edit one line in a 20 KiB config** | **3 → 3** | **12,322** | **297** | **97.6%** |
+| Restart a service and verify | 1 → 1 | 173 | 20 | 88.4% |
+| Find which of 10 hosts has an error | 1 → 1 | 1,814 | 42 | 97.7% |
+| Read lines 200–240 of a log | 1 → 1 | 4,525 | 4,502 | 0.5% |
+| Recover from a typo in an alias | 2 → 2 | 2,730 | 63 | 97.7% |
+| Fleet check (50 hosts, one line each) | 1 → 1 | 8,294 | 23 | 99.7% |
+| **Total** | **12 → 12** | **37,649** | **8,172** | **78.3%** |
+
+Task notes:
+
+- **Edit one line (297 tok).** `read_remote_file(offset 1, limit 10)` finds the
+  line (166 tok), `replace_in_remote_file` applies an exact-string edit with
+  `expectedCount` and returns an 89-tok diff, and `grep_remote` verifies
+  (29 tok). The model emits 13 tok (`oldText` + `newText`) instead of
+  re-emitting the 5,537-tok file, and the write is atomic with mode/owner
+  preserved. Same call count as 0.6.0, 97.6% fewer tokens.
+- **Read range (4,502 tok).** `read_remote_file(offset: 200, limit: 41)` is
+  within 0.5% of the `sed -n` version because the response is payload-bound
+  (41 long log lines). The improvement is discoverability and safety, not cost.
+- **Tail (2,818 tok).** 50 log lines are 15.4 KB, so the 8 KiB default now
+  returns head+tail; 20 lines fit (2,138 tok). Forgetting `| tail -n` costs the
+  same 2,818 tok instead of the old 22,577-tok worst case.
+- **Fleet (23 tok).** `only: "failures"` with nothing failed returns the
+  summary and no rows; the answer is still `{total: 50, succeeded: 50, failed: 0}`.
+- **Typo (63 tok).** The 34-tok error carries `errorKind`, a hint, and three
+  suggestions; the retry is 29 tok. 0.6.0 needed a 2,710-tok `list_connections`
+  to recover.
+
+### Latency
+
+Same local-overhead picture as §3/§6; no regression from the extra tools. This
+run's medians: process floor 1.77 ms, `executeSshCommand` direct 1.73 ms, MCP
+`run_command` cold 2.12 ms, warm-pool flag 2.12 ms, `list_connections` (50)
+0.11 ms, `run_on_many` 10 hosts 9.32 ms, and the 64 KiB log at the 8 KiB
+head+tail default 1.92 ms. The spawn floor and the direct call overlap within
+run-to-run noise; the MCP layer adds ~0.4 ms. Everything is bounded by process
+spawn, and **real SSH handshake and pooled RTT are still not measured here**;
+`reused: true` is bookkeeping only.
+
+The `stdin-epipe.json` rerun is still clean: all four 256 KiB cases exit 0 with
+no EPIPE, including a fake ssh that never drains stdin.
+
+### What this round did not measure
+
+- **A model in the loop.** All numbers are o200k_base tokens on the response
+  text. They exclude system prompts, reasoning tokens, tool-choice behavior, and
+  retry rates; they are not provider-billed tokens.
+- **Real SSH transport.** The bench uses a local fake ssh. Handshake, pooled
+  RTT, WAN latency, and per-call jitter are not measured. The e2e suite uses a
+  real local sshd but asserts correctness, not cost.
+- **Large-file transfer.** File-tool payloads are text under the 2 MiB edit
+  limit on a local filesystem; the network cost of transferring them, and the
+  2 MiB refusal boundary under a slow link, were not measured.
+- **Non-Linux remotes.** The BSD `stat -f` fallbacks, BSD `grep -H`/`--include`,
+  and a non-POSIX login shell were not exercised; the e2e host is Linux/zsh.
+- **Concurrency.** The pool was not measured under parallel agents, and the
+  bench's `run_on_many` numbers are response sizes, not wall-clock fan-out.
+- **Conflict cost.** `replace_in_remote_file`'s `conflict` path is covered by
+  e2e (deterministic drift), but its token cost on real files was not measured.
+
+The two defects found while adding the file-tool e2e tests are fixed in this
+tree and are reflected above: file-tool responses were pretty-printed instead of
+minified, and `grep_remote` lost the file name when the search path was a single
+file (GNU grep needs `-H`).
+
+---
+
+## 8. Caveats
 
 - **Fake ssh, no network.** Latency is local overhead only. Pooled vs cold RTT
-  was not measured because no local sshd was available; `reused:true` was
-  simulated by pre-creating the control socket path, and the fake still spawned
-  per call. The README's ~150 ms handshake / 5–20 ms pooled figures are the
-  right order of magnitude but were not re-verified here.
+  was not measured; `reused:true` was simulated by pre-creating the control
+  socket path, and the fake still spawned per call. The README's ~150 ms
+  handshake / 5–20 ms pooled figures are the right order of magnitude but were
+  not re-verified here. The e2e suite does use a real local sshd, but for
+  behaviour, not for timing.
 - **Token counts are o200k_base.** `cl100k_base` differs by a few percent on
   these texts; `chars/4` differs by up to 26% on logs. The report uses the real
   tokenizer.
 - **Stores are synthetic.** 50 connections with key/remotePath/lastUsed are
   representative, not a specific user's store. A leaner store makes
-  `list_connections` cheaper; the 65.6% command-field share holds regardless.
-- **Compact projections are in-memory transforms.** They show the cost of a
-  shape, not the effort or semantic risk of implementing it. Keeping `alias`
-  adds ~6 tok/call to the projected numbers.
+  `list_connections` cheaper; the per-connection field shares hold regardless.
+- **Compact projections are in-memory transforms.** Sections 1–5 show the cost
+  of a shape, not the effort or semantic risk of implementing it. Since §6 the
+  compact shape is the real response, and §7 measures it directly.
 - **Ideal task numbers are best-case.** `restart` and `read range` assume the
-  agent writes the right compound command the first time; the report labels
-  those as 0% savings rather than pretending a tool would help.
+  agent writes the right compound command the first time. In §7 the range-read
+  tool removes the shell-quoting risk but not the payload cost.
 
 ---
 
-## 8. Reproduce
+## 9. Reproduce
 
 ```bash
 cd bench
@@ -640,3 +810,5 @@ bun install
 ```
 
 Outputs: `bench/results/{fixed-cost,call-cost,latency,ergonomics,stdin-epipe}.json`.
+The file-tool scenarios need a POSIX `sh`, `sed`, `awk`, `grep`, `stat`, and
+`cksum` on the bench host; they run against files under the bench temp dir.

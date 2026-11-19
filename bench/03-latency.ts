@@ -99,7 +99,7 @@ const main = async () => {
       'MCP run_command (10 connections, cold)',
       ITERATIONS,
       () => bench.callTool('run_command', { alias: 'web01', command: 'uptime', reuse: false }),
-      'adds recordConnectionUsage (rewrites the whole store) + pretty JSON + protocol',
+      'adds recordConnectionUsage (rewrites the whole store) + minified compact JSON + protocol',
     ));
 
     // Warm-flag path: hasControlSocket() true, so reuse is reported even though
@@ -126,7 +126,7 @@ const main = async () => {
       'MCP list_connections (50)',
       ITERATIONS,
       () => bench.callTool('list_connections', {}),
-      'no ssh spawn; DB read + serialize sshArgs/sshCommand/interactiveSshCommand',
+      'no ssh spawn; DB read + serialize the compact summary (alias/target/keyPath/remotePath)',
     ));
 
     rows.push(await timeIt(
@@ -147,13 +147,14 @@ const main = async () => {
       'ten fake ssh processes, four at a time',
     ));
 
-    // Large response: isolates capture + JSON serialization of a 64 KiB stdout.
+    // Large response: isolates capture + JSON serialization at the MCP default
+    // (8 KiB stdout, head+tail).
     writeHostFixture(paths.sshDir, '_default', { out: 'x'.repeat(64 * 1024) });
     rows.push(await timeIt(
-      'MCP run_command (64 KiB stdout)',
+      'MCP run_command (64 KiB stdout, 8 KiB headtail)',
       15,
       () => bench.callTool('run_command', { alias: 'web01', command: 'cat big', reuse: false }),
-      'capture 64 KiB + pretty JSON (22k-token response)',
+      'capture 64 KiB, keep 4+4 KiB, minify (~2.8k-token response)',
     ));
 
     // 5-connection list for a direct apples-to-apples comparison.

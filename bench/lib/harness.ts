@@ -37,6 +37,12 @@ export const makeTempRoot = (prefix = 'sshya-bench'): string => {
  *
  * FAKE_SSH_ARGV_LOG appends the argv it received (one JSON array per line) so
  * tests can inspect what sshya actually invokes.
+ *
+ * FAKE_SSH_EXEC=1 switches to execute mode: the last argument (the remote
+ * command) runs locally through `sh -c` with the caller's stdin/stdout/stderr.
+ * That is what the structured file tools need (real sed/awk/grep/stat/cksum on
+ * real files); fixtures are ignored. It is still a local fake: no socket, no
+ * authentication, no network.
  */
 const FAKE_SSH_SCRIPT = `#!/bin/sh
 # Fake OpenSSH client used by bench/. No network access.
@@ -51,6 +57,13 @@ host="\${host%%:*}"
 
 if [ -n "\${FAKE_SSH_ARGV_LOG:-}" ]; then
   printf '%s\\n' "$*" >> "\${FAKE_SSH_ARGV_LOG}"
+fi
+
+if [ "\${FAKE_SSH_EXEC:-}" = "1" ]; then
+  last=""
+  for last_arg in "$@"; do last="$last_arg"; done
+  if [ -z "$last" ]; then exit 1; fi
+  exec sh -c "$last"
 fi
 
 dir="\${FAKE_SSH_DIR:-}"
@@ -129,10 +142,14 @@ export interface SeedOptions {
   prefix?: string;
   withKey?: boolean;
   withRemotePath?: boolean;
+  /** Override the stored remote_path (default /srv/app). */
+  remotePath?: string;
 }
 
 export const seedConnections = (dbPath: string, options: SeedOptions): Connection[] => {
   const prefix = options.prefix ?? 'web';
+  const remotePath = options.remotePath
+    ?? (options.withRemotePath === false ? undefined : '/srv/app');
   const connections: Connection[] = Array.from({ length: options.count }, (_, index) => {
     const n = String(index + 1).padStart(2, '0');
     return {
@@ -144,7 +161,7 @@ export const seedConnections = (dbPath: string, options: SeedOptions): Connectio
       host: `${prefix}${n}`,
       ...(options.withKey === false ? {} : { key_path: '/home/deploy/.ssh/id_ed25519' }),
       port: '2222',
-      ...(options.withRemotePath === false ? {} : { remote_path: '/srv/app' }),
+      ...(remotePath !== undefined ? { remote_path: remotePath } : {}),
       ...(index % 3 === 0 ? { lastUsed: 1_760_000_000_000 + index * 1000 } : {}),
     } as Connection;
   });
@@ -171,6 +188,7 @@ export const createBenchEnv = (prefix = 'sshya-bench'): TempPaths => {
   process.env.SSHYA_CONTROL_DIR = paths.controlDir;
   process.env.SSHYA_REUSE = '1';
   process.env.FAKE_SSH_DIR = paths.sshDir;
+  delete process.env.FAKE_SSH_EXEC;
   delete process.env.SSHYA_MAX_OUTPUT;
   delete process.env.SSHYA_CONTROL_PERSIST;
 

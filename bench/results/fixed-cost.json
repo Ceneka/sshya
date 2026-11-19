@@ -12,7 +12,7 @@
       "listChanged": true
     }
   },
-  "toolCount": 12,
+  "toolCount": 16,
   "instructions": {
     "chars": 253,
     "tokens": 53,
@@ -21,46 +21,82 @@
     "text": "SSH connection manager: call list_connections, then run_command or run_on_many. Read the sshya://guide resource before the first command for output caps, pooling, truncation advice, and error handling. Allowed aliases: all stored aliases. Read-only: no."
   },
   "toolsList": {
-    "chars": 6648,
-    "tokens": 1595,
-    "tokensCl100k": 1542,
-    "approxTokens": 1662,
-    "rawWireChars": 6682,
+    "chars": 10262,
+    "tokens": 2463,
+    "tokensCl100k": 2380,
+    "approxTokens": 2566,
+    "rawWireChars": 10296,
     "rows": [
       {
         "name": "run_on_many",
         "titleChars": 0,
         "descriptionChars": 31,
         "descriptionTokens": 7,
-        "schemaChars": 1050,
-        "schemaTokens": 258,
-        "totalChars": 1175,
-        "totalTokens": 285,
-        "paramCount": 15,
-        "paramDescriptionTokens": 24
+        "schemaChars": 1186,
+        "schemaTokens": 292,
+        "totalChars": 1311,
+        "totalTokens": 319,
+        "paramCount": 16,
+        "paramDescriptionTokens": 39
       },
       {
         "name": "run_command",
         "titleChars": 0,
         "descriptionChars": 34,
         "descriptionTokens": 8,
-        "schemaChars": 714,
-        "schemaTokens": 175,
-        "totalChars": 842,
-        "totalTokens": 202,
-        "paramCount": 11,
-        "paramDescriptionTokens": 15
+        "schemaChars": 841,
+        "schemaTokens": 207,
+        "totalChars": 969,
+        "totalTokens": 234,
+        "paramCount": 12,
+        "paramDescriptionTokens": 28
+      },
+      {
+        "name": "read_remote_file",
+        "titleChars": 24,
+        "descriptionChars": 92,
+        "descriptionTokens": 20,
+        "schemaChars": 654,
+        "schemaTokens": 165,
+        "totalChars": 916,
+        "totalTokens": 221,
+        "paramCount": 6,
+        "paramDescriptionTokens": 39
+      },
+      {
+        "name": "replace_in_remote_file",
+        "titleChars": 29,
+        "descriptionChars": 97,
+        "descriptionTokens": 21,
+        "schemaChars": 625,
+        "schemaTokens": 159,
+        "totalChars": 906,
+        "totalTokens": 218,
+        "paramCount": 5,
+        "paramDescriptionTokens": 34
+      },
+      {
+        "name": "grep_remote",
+        "titleChars": 19,
+        "descriptionChars": 58,
+        "descriptionTokens": 12,
+        "schemaChars": 687,
+        "schemaTokens": 166,
+        "totalChars": 905,
+        "totalTokens": 211,
+        "paramCount": 7,
+        "paramDescriptionTokens": 39
       },
       {
         "name": "write_remote_file",
         "titleChars": 0,
-        "descriptionChars": 32,
-        "descriptionTokens": 8,
-        "schemaChars": 533,
-        "schemaTokens": 145,
-        "totalChars": 665,
-        "totalTokens": 173,
-        "paramCount": 9,
+        "descriptionChars": 49,
+        "descriptionTokens": 12,
+        "schemaChars": 561,
+        "schemaTokens": 152,
+        "totalChars": 710,
+        "totalTokens": 185,
+        "paramCount": 10,
         "paramDescriptionTokens": 0
       },
       {
@@ -86,6 +122,18 @@
         "totalTokens": 144,
         "paramCount": 2,
         "paramDescriptionTokens": 0
+      },
+      {
+        "name": "stat_remote",
+        "titleChars": 17,
+        "descriptionChars": 77,
+        "descriptionTokens": 20,
+        "schemaChars": 338,
+        "schemaTokens": 85,
+        "totalChars": 575,
+        "totalTokens": 140,
+        "paramCount": 2,
+        "paramDescriptionTokens": 11
       },
       {
         "name": "add_connection",
@@ -197,22 +245,22 @@
     ]
   },
   "guide": {
-    "chars": 3568,
-    "tokens": 881,
-    "tokensCl100k": 876,
-    "approxTokens": 892,
-    "wrappedChars": 3686,
-    "rawWireChars": 3720
+    "chars": 4443,
+    "tokens": 1121,
+    "tokensCl100k": 1117,
+    "approxTokens": 1111,
+    "wrappedChars": 4570,
+    "rawWireChars": 4604
   },
   "alwaysOn": {
-    "chars": 6901,
-    "tokens": 1648,
-    "approxTokens": 1726
+    "chars": 10515,
+    "tokens": 2516,
+    "approxTokens": 2629
   },
   "withGuide": {
-    "chars": 10469,
-    "tokens": 2529,
-    "approxTokens": 2618
+    "chars": 14958,
+    "tokens": 3637,
+    "approxTokens": 3740
   },
   "protocolEnvelope": {
     "initializeResponseChars": 464
@@ -220,27 +268,49 @@
   "redundancy": {
     "repeatedSentences": [
       {
-        "sentence": "keep end when truncating",
+        "sentence": "which part survives (default headtail)",
         "count": 2,
-        "wastedTokens": 5
+        "wastedTokens": 8
+      },
+      {
+        "sentence": "remote path (relative to remotepath)",
+        "count": 2,
+        "wastedTokens": 8
+      },
+      {
+        "sentence": "deprecated: truncate=\"tail\"",
+        "count": 2,
+        "wastedTokens": 6
       }
     ],
-    "wastedTokens": 5,
+    "wastedTokens": 22,
     "shingleSize": 10,
     "repeatedShingles": 0,
     "duplicatedRuns": 0,
     "repeatedParamDescriptions": [
       {
-        "description": "Keep end when truncating",
-        "count": 2,
-        "tokensEach": 5,
-        "wastedTokens": 5
+        "description": "Exact connection alias",
+        "count": 4,
+        "tokensEach": 3,
+        "wastedTokens": 9
       },
       {
-        "description": "Output cap per stream",
+        "description": "Which part survives (default headtail)",
         "count": 2,
-        "tokensEach": 4,
-        "wastedTokens": 4
+        "tokensEach": 8,
+        "wastedTokens": 8
+      },
+      {
+        "description": "Remote path (relative to remotePath)",
+        "count": 2,
+        "tokensEach": 8,
+        "wastedTokens": 8
+      },
+      {
+        "description": "Deprecated: truncate=\"tail\"",
+        "count": 2,
+        "tokensEach": 6,
+        "wastedTokens": 6
       },
       {
         "description": "Remote stdin data",
@@ -256,52 +326,52 @@
       }
     ],
     "boilerplate": {
-      "titles": 0,
+      "titles": 17,
       "schemaDialect": {
-        "occurrences": 12,
-        "tokens": 132
+        "occurrences": 16,
+        "tokens": 176
       },
       "executionTaskSupport": {
-        "occurrences": 12,
-        "tokens": 84
+        "occurrences": 16,
+        "tokens": 112
       },
       "safeIntegerMaximums": {
         "occurrences": 5,
         "tokens": 30
       },
       "annotations": {
-        "occurrences": 5,
-        "tokens": 42
+        "occurrences": 9,
+        "tokens": 70
       },
       "parameterDescriptions": {
-        "tokens": 42
+        "tokens": 193
       },
-      "descriptionTokens": 69,
-      "schemaTokens": 1250
+      "descriptionTokens": 146,
+      "schemaTokens": 1898
     }
   },
   "projection": {
-    "note": "Projection only: tools/list JSON transformed in memory; no product change.",
+    "note": "Historical round-1 projection: tools/list JSON transformed in memory. Kept for the before/after narrative; the shipped descriptions are the current measurement above.",
     "currentToolsList": {
-      "chars": 6648,
-      "tokens": 1595
+      "chars": 10262,
+      "tokens": 2463
     },
     "slim40": {
-      "chars": 6648,
-      "tokens": 1595
+      "chars": 10096,
+      "tokens": 2426
     },
     "slim60": {
-      "chars": 6648,
-      "tokens": 1595
+      "chars": 10096,
+      "tokens": 2426
     },
     "leanNoParamDescriptions": {
-      "chars": 6218,
-      "tokens": 1516
+      "chars": 8644,
+      "tokens": 2120
     },
-    "instructionAndToolTotalCurrent": 1648,
-    "instructionAndToolTotalSlim40": 1648,
-    "instructionAndToolTotalLean": 1569,
-    "savingsTokens": 0,
-    "leanSavingsTokens": 79
+    "instructionAndToolTotalCurrent": 2516,
+    "instructionAndToolTotalSlim40": 2479,
+    "instructionAndToolTotalLean": 2173,
+    "savingsTokens": 37,
+    "leanSavingsTokens": 343
   }
 }

@@ -3,12 +3,18 @@
  *
  * Every call goes through the real MCP server over InMemoryTransport with a fake
  * `ssh` binary and an isolated store. Measures the bytes/tokens the model
- * actually sees in content[0].text, plus the raw JSON-RPC payload, and projects a
- * compact response shape.
+ * actually sees in content[0].text, plus the raw JSON-RPC payload.
+ *
+ * Since round 2 the shipped response shape is already compact/minified; the
+ * `compact*` columns are kept only as the round-1 projection for the historical
+ * tables. The file-tool scenarios run the fake ssh in FAKE_SSH_EXEC mode so
+ * sed/awk/grep/stat/cksum see real local files (still no network).
  *
  * Run: bun run bench/02-call-cost.ts
  */
 import fs from 'fs';
+import path from 'path';
+import { makeNginxConf } from './lib/fixtures';
 import {
   clearHostFixtures,
   createBenchEnv,
@@ -107,7 +113,15 @@ const main = async () => {
 
     let metadataTokens = tokens(minified);
     if (isPlainObject(parsed)) {
-      const body = [parsed.stdout, parsed.stderr].filter(part => typeof part === 'string').join('');
+      const body = [
+        parsed.stdout,
+        parsed.stderr,
+        parsed.content,
+        parsed.diff,
+        Array.isArray(parsed.matches) ? parsed.matches.join('\n') : undefined,
+      ]
+        .filter(part => typeof part === 'string')
+        .join('');
       metadataTokens = Math.max(0, tokens(minified) - tokens(body));
     }
 
@@ -146,8 +160,28 @@ const main = async () => {
     for (let i = 0; big.length < 64 * 1024; i += 1) big += line(i);
     writeHostFixture(paths.sshDir, '_default', { out: big });
 
-    for (const cap of [65536, 16384, 8192]) {
-      await record(`run_command: 64KiB log, cap ${cap / 1024}KiB`, async () => {
+    // The shipped MCP default: 8 KiB stdout kept as head+tail.
+    await record('run_command: 64KiB log, MCP default (8KiB headtail)', async () => {
+      const call = await bench.callTool('run_command', {
+        alias: 'web01',
+        command: 'cat /var/log/nginx/error.log',
+      });
+      return call;
+    }, compactRun);
+
+    // The pre-round-3 shape: the same log at the old 64 KiB head-only default.
+    await record('run_command: 64KiB log, 64KiB head (old default)', async () => {
+      const call = await bench.callTool('run_command', {
+        alias: 'web01',
+        command: 'cat /var/log/nginx/error.log',
+        maxOutputBytes: 65536,
+        truncate: 'head',
+      });
+      return call;
+    }, compactRun);
+
+    for (const cap of [65536, 16384]) {
+      await record(`run_command: 64KiB log, cap ${cap / 1024}KiB headtail`, async () => {
         const call = await bench.callTool('run_command', {
           alias: 'web01',
           command: 'cat /var/log/nginx/error.log',
@@ -175,6 +209,59 @@ const main = async () => {
       const call = await bench.callTool('run_on_many', {
         aliases: hosts,
         command: 'df -h /',
+      });
+      return call;
+    }, compactMany);
+
+    // --- Fleet filters --------------------------------------------------------
+    clearHostFixtures(paths.sshDir);
+    for (const host of hosts) writeHostFixture(paths.sshDir, host, { out: '0\n' });
+    writeHostFixture(paths.sshDir, 'web04', { out: '7\n' });
+    const errorHunt = 'grep -c ERROR /var/log/app.log || true';
+
+    await record('run_on_many: 10 hosts, 1 error (all results)', async () => {
+      const call = await bench.callTool('run_on_many', { aliases: hosts, command: errorHunt });
+      return call;
+    }, compactMany);
+
+    await record('run_on_many: 10 hosts, 1 error, only=failures', async () => {
+      const call = await bench.callTool('run_on_many', {
+        aliases: hosts,
+        command: errorHunt,
+        only: 'failures',
+      });
+      return call;
+    }, compactMany);
+
+    await record('run_on_many: 10 hosts, 1 error, match [1-9]', async () => {
+      const call = await bench.callTool('run_on_many', {
+        aliases: hosts,
+        command: errorHunt,
+        match: '[1-9]',
+      });
+      return call;
+    }, compactMany);
+
+    const hosts50 = Array.from({ length: 50 }, (_, index) => `web${String(index + 1).padStart(2, '0')}`);
+    clearHostFixtures(paths.sshDir);
+    seedConnections(paths.db, { count: 50 });
+    for (const host of hosts50) writeHostFixture(paths.sshDir, host, { out: 'active\n' });
+
+    await record('run_on_many: 50 hosts, all active (all results)', async () => {
+      const call = await bench.callTool('run_on_many', {
+        aliases: hosts50,
+        command: 'systemctl is-active nginx',
+        concurrency: 8,
+      });
+      return call;
+    }, compactMany);
+
+    await record('run_on_many: 50 hosts, all active, only=failures', async () => {
+      const call = await bench.callTool('run_on_many', {
+        aliases: hosts50,
+        command: 'systemctl is-active nginx',
+        concurrency: 8,
+        only: 'failures',
       });
       return call;
     }, compactMany);
@@ -251,24 +338,78 @@ const main = async () => {
       return call;
     }, compactRun);
 
+    // --- Structured file tools (real local files through FAKE_SSH_EXEC) ------
+    const filesRoot = path.join(paths.root, 'remote-files');
+    fs.mkdirSync(filesRoot, { recursive: true });
+    fs.writeFileSync(path.join(filesRoot, 'nginx.conf'), makeNginxConf(20 * 1024));
+    fs.mkdirSync(path.join(filesRoot, 'sites'), { recursive: true });
+    for (let index = 0; index < 40; index += 1) {
+      fs.writeFileSync(
+        path.join(filesRoot, 'sites', `site${String(index).padStart(2, '0')}.conf`),
+        `server_name app${index}.internal;\nproxy_read_timeout 60s;\n`,
+      );
+    }
+    seedConnections(paths.db, { count: 10, remotePath: filesRoot });
+    process.env.FAKE_SSH_EXEC = '1';
+
+    try {
+      await record('read_remote_file: 40 lines of 20KiB config', async () => {
+        const call = await bench.callTool('read_remote_file', {
+          alias: 'web01',
+          path: 'nginx.conf',
+          offset: 1,
+          limit: 40,
+        });
+        return call;
+      }, (value: any) => value);
+
+      await record('grep_remote: 1 match in 40 site files', async () => {
+        const call = await bench.callTool('grep_remote', {
+          alias: 'web01',
+          pattern: 'app7\\.',
+          path: 'sites',
+        });
+        return call;
+      }, (value: any) => value);
+
+      await record('stat_remote: 3 paths', async () => {
+        const call = await bench.callTool('stat_remote', {
+          alias: 'web01',
+          paths: ['nginx.conf', 'sites', 'missing.conf'],
+        });
+        return call;
+      }, (value: any) => value);
+
+      await record('replace_in_remote_file: one line in 20KiB config', async () => {
+        const call = await bench.callTool('replace_in_remote_file', {
+          alias: 'web01',
+          path: 'nginx.conf',
+          oldText: 'server_name app0.example.com',
+          newText: 'server_name app0.internal.example.com',
+        });
+        return call;
+      }, (value: any) => value);
+
+      await record('write_remote_file: atomic=true', async () => {
+        const call = await bench.callTool('write_remote_file', {
+          alias: 'web01',
+          path: 'atomic.conf',
+          content: 'port: 8080\nworkers: 4\n',
+          atomic: true,
+        });
+        return call;
+      }, (value: any) => value);
+    } finally {
+      delete process.env.FAKE_SSH_EXEC;
+    }
+
     // --- Field-level costs ----------------------------------------------------
     seedConnections(paths.db, { count: 50 });
     const list50 = await bench.callTool('list_connections', {});
     const list50Text = list50.text;
     const list50Json = JSON.parse(list50Text) as Array<Record<string, any>>;
-    const listFields = [
-      'sshArgs',
-      'sshCommand',
-      'interactiveSshCommand',
-      'id',
-      'alias',
-      'user',
-      'host',
-      'port',
-      'key_path',
-      'remote_path',
-      'lastUsed',
-    ].map(field => {
+    const listFieldNames = [...new Set(list50Json.flatMap(connection => Object.keys(connection)))];
+    const listFields = listFieldNames.map(field => {
       const value = list50Json.map(connection => JSON.stringify(connection[field] ?? null));
       const text = `"${field}":${value.join(',')}`;
       return {
@@ -327,9 +468,8 @@ const main = async () => {
     const totalMinified = rows.reduce((sum, row) => sum + row.minifiedTokens, 0);
     const totalCompact = rows.reduce((sum, row) => sum + row.compactTokens, 0);
 
-    // Head+tail projection for the recommended default cap. The real
-    // implementation would cut on line boundaries; this is a close estimate of
-    // the token cost of "first N/2 + last N/2 bytes".
+    // Head+tail check for the shipped default. The old shape is the explicit
+    // 64 KiB head row above; this shows what the first/last split costs.
     const headTail = (bytes: number) => {
       const half = Math.floor(bytes / 2);
       const marker = '\n… [sshya] truncated: showing first+last bytes …\n';
@@ -337,6 +477,8 @@ const main = async () => {
       return { bytes, chars: text.length, tokens: tokens(text) };
     };
     const headTailProjection = [4096, 8192, 16384].map(headTail);
+    const oldHeadRow = rows.find(row => row.name === 'run_command: 64KiB log, 64KiB head (old default)');
+    const defaultRow = rows.find(row => row.name === 'run_command: 64KiB log, MCP default (8KiB headtail)');
 
     const result = {
       tokenizer: TOKENIZER_NAME,
@@ -354,27 +496,28 @@ const main = async () => {
       headTailProjection,
       wireShape,
       findings: {
-        defaultCapBytes: 64 * 1024,
-        bytesPerTokenLog: Math.round((64 * 1024) / Math.max(1, rows[1]?.textTokens ?? 1)),
+        defaultCapBytes: 8 * 1024,
+        defaultMode: 'headtail',
+        oldShapeTokens: oldHeadRow?.textTokens ?? null,
+        defaultTokens: defaultRow?.textTokens ?? null,
+        bytesPerTokenLog: Math.round((64 * 1024) / Math.max(1, oldHeadRow?.textTokens ?? 1)),
       },
     };
     const file = writeResults('call-cost.json', result);
 
     console.log(`tokenizer: ${TOKENIZER_NAME}\n`);
-    console.log('PER-CALL RESPONSE COST (content[0].text, pretty JSON)');
-    console.log('scenario'.padEnd(44) + 'chars'.padStart(9) + 'tokens'.padStart(9) + 'min tok'.padStart(9) + 'compact'.padStart(9) + 'meta tok'.padStart(9));
+    console.log('PER-CALL RESPONSE COST (content[0].text, shipped minified JSON)');
+    console.log('scenario'.padEnd(52) + 'chars'.padStart(9) + 'tokens'.padStart(9) + 'meta tok'.padStart(10));
     for (const row of rows) {
       console.log(
-        row.name.padEnd(44)
+        row.name.padEnd(52)
         + fmt(row.textChars).padStart(9)
         + fmt(row.textTokens).padStart(9)
-        + fmt(row.minifiedTokens).padStart(9)
-        + fmt(row.compactTokens).padStart(9)
-        + fmt(row.metadataTokens).padStart(9),
+        + fmt(row.metadataTokens).padStart(10),
       );
     }
     console.log('\nTOTALS across scenarios');
-    console.log(`current ${fmt(totalNow)} tok | minified ${fmt(totalMinified)} tok (${result.totals.minifiedSavingsPct}% saved) | compact ${fmt(totalCompact)} tok (${result.totals.compactSavingsPct}% saved)`);
+    console.log(`measured ${fmt(totalNow)} tok; the minified/compact projection columns are historical (the response already is that shape)`);
 
     console.log('\nlist_connections (50) FIELD SHARE');
     for (const row of listFields) {
@@ -393,9 +536,9 @@ const main = async () => {
 
     console.log('\nWIRE SHAPE');
     console.log(JSON.stringify(wireShape, null, 2));
-    console.log('\nHEAD+TAIL PROJECTION (64 KiB log, no product change)');
+    console.log('\nHEAD+TAIL CHECK (64 KiB log, no truncation applied)');
     for (const row of headTailProjection) {
-      console.log(`  ${String(row.bytes).padStart(6)} bytes -> ${fmt(row.tokens)} tok (vs ${fmt(rows[1]!.textTokens)} tok for 64 KiB head-only)`);
+      console.log(`  ${String(row.bytes).padStart(6)} bytes -> ${fmt(row.tokens)} tok (old 64 KiB head default: ${fmt(oldHeadRow?.textTokens ?? 0)} tok; shipped default: ${fmt(defaultRow?.textTokens ?? 0)} tok)`);
     }
     console.log(`\nwrote ${file}`);
   } finally {

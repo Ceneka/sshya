@@ -313,7 +313,7 @@ const main = async () => {
       boilerplate,
     },
     projection: {
-      note: 'Projection only: tools/list JSON transformed in memory; no product change.',
+      note: 'Historical round-1 projection: tools/list JSON transformed in memory. Kept for the before/after narrative; the shipped descriptions are the current measurement above.',
       currentToolsList: { chars: toolListText.length, tokens: tokens(toolListText) },
       slim40: { chars: slimText.length, tokens: tokens(slimText) },
       slim60: { chars: slimCap60.length, tokens: tokens(slimCap60) },
@@ -371,7 +371,7 @@ const main = async () => {
   console.log(`  titles ${fmt(boilerplate.titles)} tok; $schema ${boilerplate.schemaDialect.occurrences}x ${fmt(boilerplate.schemaDialect.tokens)} tok; execution ${boilerplate.executionTaskSupport.occurrences}x ${fmt(boilerplate.executionTaskSupport.tokens)} tok; MAX_SAFE_INTEGER ${boilerplate.safeIntegerMaximums.occurrences}x ${fmt(boilerplate.safeIntegerMaximums.tokens)} tok; annotations ${fmt(boilerplate.annotations.tokens)} tok`);
   console.log(`  descriptions ${fmt(boilerplate.descriptionTokens)} tok; schemas ${fmt(boilerplate.schemaTokens)} tok (of which param descriptions ${fmt(boilerplate.parameterDescriptions.tokens)} tok)`);
 
-  console.log('\nPROJECTION (no product change)');
+  console.log('\nPROJECTION (historical, round 1; no product change)');
   console.log(`current tools/list: ${fmt(result.projection.currentToolsList.tokens)} tok; slim (first sentence, no titles, 40-char params): ${fmt(result.projection.slim40.tokens)} tok (${pct(result.projection.savingsTokens, result.projection.instructionAndToolTotalCurrent)} of always-on)`);
   console.log(`lean (no param descriptions at all): ${fmt(result.projection.leanNoParamDescriptions.tokens)} tok (${pct(result.projection.leanSavingsTokens, result.projection.instructionAndToolTotalCurrent)} of always-on)`);
   console.log(`\nwrote ${file}`);

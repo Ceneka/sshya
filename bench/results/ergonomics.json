@@ -1,5 +1,6 @@
 {
   "tokenizer": "gpt-tokenizer 3.x o200k_base (cl100k_base for reference)",
+  "note": "baseline* is REPORT.md §4 (0.6.0); measured is the final tree. File tasks use FAKE_SSH_EXEC on local temp files.",
   "tasks": [
     {
       "task": "check disk on 5 hosts (discover + fan out)",
@@ -7,32 +8,32 @@
       "responseTokens": 407,
       "outputTokens": 0,
       "totalTokens": 407,
-      "idealCalls": 2,
-      "idealTokens": 246,
-      "savingPct": 39.6,
-      "note": "run_on_many already saves 5 calls; response metadata still costs ~224 tok. Compact list + compact fan-out would cost 246 tok. Calling run_command per host would cost 41 tok/host (205 tok, 5 calls)."
+      "baselineCalls": 2,
+      "baselineTokens": 2315,
+      "savingPct": 82.4,
+      "note": "one list_connections (183 tok) + one run_on_many (224 tok). Calling run_command per host would cost 41 tok/host over 5 calls."
     },
     {
       "task": "tail a log (agent asks for last 50 lines)",
       "calls": 1,
-      "responseTokens": 5318,
+      "responseTokens": 2818,
       "outputTokens": 0,
-      "totalTokens": 5318,
-      "idealCalls": 1,
-      "idealTokens": 2138,
-      "savingPct": 59.8,
-      "note": "Works today with \"| tail -n 50\". Without tail in the command, the default cap returns 22,577 tok (67,194 chars, truncated at 64 KiB). 50 lines already costs 5,318 tok; 20 lines costs 2,138 tok."
+      "totalTokens": 2818,
+      "baselineCalls": 1,
+      "baselineTokens": 5476,
+      "savingPct": 48.5,
+      "note": "50 log lines are 15,445 bytes, so the 8 KiB default keeps head+tail (2,818 tok); 20 lines fit under the cap (2,138 tok). Forgetting tail now costs the same 8 KiB (2,818 tok) instead of the old 64 KiB head (22,577 tok)."
     },
     {
       "task": "edit one line in a 20 KiB config",
       "calls": 3,
-      "responseTokens": 6453,
-      "outputTokens": 5537,
-      "totalTokens": 11990,
-      "idealCalls": 2,
-      "idealTokens": 650,
-      "savingPct": 94.6,
-      "note": "No read/edit tool: the agent cats 5,537 tok, emits the whole file (5,537 tok output), rewrites it, then verifies. A read_remote_file(offset,limit) + replace_in_remote_file would need ~40 lines + ~20 tok ack + verify."
+      "responseTokens": 284,
+      "outputTokens": 13,
+      "totalTokens": 297,
+      "baselineCalls": 3,
+      "baselineTokens": 12322,
+      "savingPct": 97.6,
+      "note": "read_remote_file(1,10) + replace_in_remote_file + grep_remote verify = 284 tok. The old path cat the whole 5,537 tok file, re-emitted it, rewrote it non-atomically, then verified. New responses: read 166, replace 89, verify 29 tok."
     },
     {
       "task": "restart a service and verify",
@@ -40,69 +41,75 @@
       "responseTokens": 20,
       "outputTokens": 0,
       "totalTokens": 20,
-      "idealCalls": 1,
-      "idealTokens": 20,
-      "savingPct": 0,
-      "note": "One compound command works without sudo. With sudo the failure (87 tok) is classified as \"tty\" and the hint does not mention tty:true; retrying with tty burns a timeout."
+      "baselineCalls": 1,
+      "baselineTokens": 173,
+      "savingPct": 88.4,
+      "note": "One compound command works without sudo. With sudo the failure (87 tok) is classified as \"tty\" and the hint names tty:true / sudo -n."
     },
     {
       "task": "find which of 10 hosts has an error",
       "calls": 1,
-      "responseTokens": 214,
+      "responseTokens": 42,
       "outputTokens": 0,
-      "totalTokens": 214,
-      "idealCalls": 1,
-      "idealTokens": 20,
-      "savingPct": 90.7,
-      "note": "Answer is one alias, but every host carries ~19 fields. Compact = 153 tok; a matched-only reply ({matched:[{alias:\"web04\",count:7}]}) is ~20 tok. 50 hosts costs 974 tok (2,872 chars) for an answer that is a list of failing aliases."
+      "totalTokens": 42,
+      "baselineCalls": 1,
+      "baselineTokens": 1814,
+      "savingPct": 97.7,
+      "note": "match: \"[1-9]\" returns only web04's matching line; the summary still says total=10, failed=0. The all-results reply costs 214 tok for the same answer."
     },
     {
       "task": "read lines 200-240 of a log",
       "calls": 1,
-      "responseTokens": 4363,
+      "responseTokens": 4502,
       "outputTokens": 0,
-      "totalTokens": 4363,
-      "idealCalls": 1,
-      "idealTokens": 4363,
-      "savingPct": 0,
-      "note": "sed works (4,363 tok). No read_remote_file means the agent must know sed/awk and shell-quote; a read_remote_file(offset,limit) would be discoverable and would not mangle binary data."
+      "totalTokens": 4502,
+      "baselineCalls": 1,
+      "baselineTokens": 4525,
+      "savingPct": 0.5,
+      "note": "read_remote_file(offset:200, limit:41) adds numbered lines and totalLines. The response is payload-bound; the gain is a discoverable schema, binary refusal, and no sed quoting, not fewer tokens."
     },
     {
       "task": "recover from a typo in an alias",
       "calls": 2,
-      "responseTokens": 397,
+      "responseTokens": 63,
       "outputTokens": 0,
-      "totalTokens": 397,
-      "idealCalls": 1,
-      "idealTokens": 60,
-      "savingPct": 84.9,
-      "note": "\"Alias not found\" returns no hint, no candidates and no errorKind; the agent must list the store (363 tok for 10 connections; compact list 113 tok) or guess again. Three closest aliases in the error would cost ~20 tok."
+      "totalTokens": 63,
+      "baselineCalls": 2,
+      "baselineTokens": 2730,
+      "savingPct": 97.7,
+      "note": "The error now carries errorKind, a hint, and 3 suggestions, so the retry is immediate: 34 + 29 tok. The old path was error + a full list_connections (2,710 tok at 10 connections)."
     },
     {
       "task": "fleet check (50 hosts, one line each)",
       "calls": 1,
-      "responseTokens": 974,
+      "responseTokens": 23,
       "outputTokens": 0,
-      "totalTokens": 974,
-      "idealCalls": 1,
-      "idealTokens": 16,
-      "savingPct": 98.4,
-      "note": "974 tok for 50 one-word answers; compact results = 713 tok; a failures-only summary = 16 tok."
+      "totalTokens": 23,
+      "baselineCalls": 1,
+      "baselineTokens": 8294,
+      "savingPct": 99.7,
+      "note": "only:\"failures\" returns the summary with no result rows (23 tok). All 50 results cost 974 tok."
     }
   ],
   "totals": {
-    "measuredTaskTokens": 23683,
-    "idealTokens": 7513,
-    "savingsPct": 68.3,
-    "calls": 12,
-    "idealCalls": 10
+    "measuredTaskTokens": 8172,
+    "measuredCalls": 12,
+    "baselineTaskTokens": 37649,
+    "baselineCalls": 12,
+    "savingPct": 78.3
   },
   "friction": {
     "responseMeta": {
       "totalChars": 60,
-      "metadataChars": 0,
+      "metadataChars": 53,
       "outputChars": 7,
-      "metadataShare": "0.0%"
+      "metadataShare": "88.3%",
+      "keys": [
+        "alias",
+        "ok",
+        "exitCode",
+        "stdout"
+      ]
     },
     "aliasError": {
       "ok": false,
@@ -115,7 +122,7 @@
       ],
       "tokens": 34,
       "hasHint": false,
-      "hasCandidates": false,
+      "hasSuggestions": true,
       "hasErrorKind": true
     },
     "sudoError": {
@@ -129,43 +136,7 @@
       "`--no-cwd`",
       "`sshya show <alias>`",
       "`sshya doctor --probe`"
-    ],
-    "toolParamMismatches": [
-      {
-        "mcp": "write_remote_file.path",
-        "store": "connection.remote_path",
-        "note": "same concept, different name"
-      },
-      {
-        "mcp": "run_command.cwd (boolean)",
-        "note": "returns cwd as a string in the result; the boolean reads like a path"
-      },
-      {
-        "mcp": "run_command.maxOutputBytes",
-        "cli": "--max-output",
-        "note": "no maxOutputBytes on run_on_many docs even though it exists"
-      },
-      {
-        "mcp": "run_command.timeoutMs",
-        "cli": "--timeout",
-        "note": "CLI accepts seconds, MCP milliseconds"
-      },
-      {
-        "mcp": "run_on_many",
-        "note": "no tty, stdin, or reuse params: cannot run sudo or pipe data across a fleet"
-      },
-      {
-        "mcp": "run_command.tail (boolean)",
-        "note": "only switches which end is kept when truncating; does not add `tail -n`"
-      }
     ]
-  },
-  "projections": {
-    "note": "Computed from the measured responses; no product change.",
-    "compactMany10": 153,
-    "matched10": 14,
-    "fleet50FailuresOnly": 16,
-    "compactList10": 113
   },
   "fixtures": {
     "logLines": 300,

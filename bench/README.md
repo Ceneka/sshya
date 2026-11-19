@@ -22,9 +22,9 @@ same tables that appear in the report.
 | Script | Measures |
 | --- | --- |
 | `01-fixed-cost.ts` | `initialize.instructions`, `tools/list` (per tool: description + schema), `resources/list`, and `sshya://guide` |
-| `02-call-cost.ts` | Response size for `run_command`, `run_on_many`, `test_connection`, `list_connections` (5/50), failures (auth, host key, timeout), `get_connection`, `write_remote_file`, missing alias |
-| `03-latency.ts` | Process-spawn floor vs `executeSshCommand` vs MCP round trip; 10-host fan-out; 64 KiB response |
-| `04-ergonomics.ts` | Realistic agent tasks: calls, response tokens, output tokens, proposed-shape tokens |
+| `02-call-cost.ts` | Response size for `run_command` (tiny, 64 KiB log at several caps), `run_on_many` (10/50 hosts, all/failures/match), `test_connection`, `list_connections` (5/50), failures (auth, host key, timeout), `get_connection`, `write_remote_file` (whole-file and atomic), and the four structured file tools |
+| `03-latency.ts` | Process-spawn floor vs `executeSshCommand` vs MCP round trip; 10-host fan-out; 64 KiB capture at the 8 KiB head+tail default |
+| `04-ergonomics.ts` | Realistic agent tasks with the final tool mix (structured file tools included), compared against the original 0.6.0 totals from `REPORT.md` §4 |
 | `05-stdin-epipe.ts` | Child-process reproduction of unhandled EPIPE when ssh exits without draining stdin |
 
 ## Method
@@ -34,7 +34,11 @@ same tables that appear in the report.
   from source text.
 - **Fake ssh only.** `SSHYA_SSH_BIN` points at `bench/lib/harness.ts`'s shell
   script. It emits fixture stdout/stderr and exit codes keyed by the host in the
-  `user@host` argument. It never opens a socket.
+  `user@host` argument. It never opens a socket. The structured file tools need
+  real `sed`/`awk`/`grep`/`stat`/`cksum`, so those scenarios set
+  `FAKE_SSH_EXEC=1`: the fake executes the remote command locally through
+  `sh -c` against files under the bench temp dir. Still no socket and no
+  network; the e2e suite covers the same tools against a real local sshd.
 - **Isolated state.** `SSHYA_DB`, `SSHYA_CONTROL_DIR`, and `FAKE_SSH_DIR` live
   under a fresh `/tmp/opencode/sshya-bench-*` directory. `~/.sshya` and `~/.ssh`
   are never touched.
