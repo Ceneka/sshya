@@ -6,6 +6,7 @@ import { ByteCapture, defaultMaxOutputBytes } from '../helpers/capture';
 import { classifySshError, spawnFailure, type SshErrorKind } from '../helpers/errors';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildSshOptionArgs, type HostKeyChecking } from '../helpers/ssh';
+import { clampTimeoutMs } from '../helpers/timer';
 import { jsonEnabled, printJson } from '../output';
 
 export interface CopyOptions {
@@ -60,6 +61,39 @@ const buildRemoteSpec = (connection: Connection, remotePath: string): string => 
     return `${connection.user}@${connection.host}:${resolveRemotePath(connection, remotePath)}`;
 };
 
+/**
+ * scp decides whether an operand is remote by looking for a colon before any
+ * slash (`[user@]host:path`). sshya builds the remote side itself, so a *local*
+ * operand with that shape would make scp open an SSH connection to a second
+ * host — which turns a read-only "download" into an upload to an arbitrary
+ * host. Reject those operands instead of letting scp reinterpret them.
+ */
+export const looksLikeRemoteCopyOperand = (value: string): boolean => {
+    // Windows drive paths are local even though they contain a colon.
+    if (process.platform === 'win32' && /^[A-Za-z]:[\\/]/.test(value)) {
+        return false;
+    }
+    const colon = value.indexOf(':');
+    if (colon <= 0) {
+        return false;
+    }
+    const slash = value.indexOf('/');
+    return slash === -1 || colon < slash;
+};
+
+export const copyLocalOperandProblem = (
+    value: string,
+    role: 'source' | 'destination',
+): string | undefined => {
+    if (value.startsWith('-')) {
+        return `Refusing ${role} "${value}": a local path cannot start with "-" (prefix it with "./" if it is a real file name).`;
+    }
+    if (looksLikeRemoteCopyOperand(value)) {
+        return `Refusing ${role} "${value}": it looks like a remote scp target (host:path). Local paths cannot contain ":" before a "/"; prefix it with "./" to force a local path.`;
+    }
+    return undefined;
+};
+
 export const buildCopyArgs = (
     connection: Connection,
     source: string,
@@ -103,11 +137,35 @@ export const executeCopy = (
     mode: 'inherit' | 'capture' = 'capture',
 ): Promise<CopyResult> => {
     const startedAt = Date.now();
-    const args = buildCopyArgs(connection, source, destination, {
-        ...options,
-        batchMode: options.batchMode ?? true,
-        reuse: options.reuse ?? true,
-    });
+    const download = options.download === true;
+    const localRole = download ? 'destination' : 'source';
+    const localOperand = expandHomePath(download ? destination : source) ?? (download ? destination : source);
+    const problem = copyLocalOperandProblem(localOperand, localRole);
+    if (problem) {
+        return Promise.resolve({
+            ok: false,
+            alias: connection.alias,
+            exitCode: -1,
+            stdout: '',
+            stderr: `${problem}\n`,
+            timedOut: false,
+            durationMs: 0,
+            errorKind: 'invalid-path',
+            hint: problem,
+        });
+    }
+
+    const args = buildCopyArgs(
+        connection,
+        download ? source : localOperand,
+        download ? localOperand : destination,
+        {
+            ...options,
+            batchMode: options.batchMode ?? true,
+            reuse: options.reuse ?? true,
+        },
+    );
+    const timeoutMs = clampTimeoutMs(options.timeoutMs);
     const maxBytes = defaultMaxOutputBytes();
     const stdoutCapture = new ByteCapture({ maxBytes });
     const stderrCapture = new ByteCapture({ maxBytes: Math.min(maxBytes, 16 * 1024) });
@@ -154,7 +212,7 @@ export const executeCopy = (
         let killTimer: NodeJS.Timeout | undefined;
         let forceKillTimer: NodeJS.Timeout | undefined;
 
-        if (options.timeoutMs && options.timeoutMs > 0) {
+        if (timeoutMs) {
             killTimer = setTimeout(() => {
                 timedOut = true;
                 killChild('SIGTERM');
@@ -164,7 +222,7 @@ export const executeCopy = (
                     settleTimer.unref?.();
                 }, 2000);
                 forceKillTimer.unref?.();
-            }, options.timeoutMs);
+            }, timeoutMs);
         }
 
         const finish = (exitCode: number | null) => {
@@ -178,7 +236,7 @@ export const executeCopy = (
             const stderr = stderrCapture.text();
             const failure = spawnError
                 ? spawnFailure(spawnError)
-                : classifySshError(stderr, { timedOut, exitCode, timeoutMs: options.timeoutMs });
+                : classifySshError(stderr, { timedOut, exitCode, timeoutMs });
 
             resolve({
                 ok,
@@ -302,5 +360,5 @@ export async function copyConnectionPrompt(
         }
     }
 
-    process.exitCode = result.timedOut ? 124 : (result.exitCode ?? 1);
+    process.exitCode = result.timedOut ? 124 : result.exitCode === -1 ? 1 : (result.exitCode ?? 1);
 }

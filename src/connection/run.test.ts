@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { DEFAULT_RUN_TIMEOUT_MS, executeSshCommand, resolveRunTimeoutMs } from './run';
+import { MAX_TIMEOUT_MS } from '../helpers/timer';
 import type { Connection } from '../database';
 
 const connection: Connection = {
@@ -200,6 +201,34 @@ describe('executeSshCommand', () => {
     expect(result.exitCode).toBeNull();
     expect(Date.now() - startedAt).toBeLessThan(3000);
   });
+
+  test('swallows EPIPE when the remote command exits before reading inline stdin', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('exit-early.sh', "printf 'done\\n'; exit 0");
+
+    // Larger than the usual 64 KiB pipe buffer so the write actually fails.
+    const result = await executeSshCommand(connection, 'cat', {
+      reuse: false,
+      stdin: Buffer.alloc(1024 * 1024, 'x'),
+      timeoutMs: 5000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe('done\n');
+    expect(result.exitCode).toBe(0);
+  });
+
+  test('clamps a timeout above the setTimeout limit instead of aborting after 1 ms', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('short-sleep.sh', 'sleep 0.2; printf ok');
+
+    const result = await executeSshCommand(connection, 'ok', {
+      reuse: false,
+      timeoutMs: 1_000_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.timeoutMs).toBe(MAX_TIMEOUT_MS);
+  });
 });
 
 describe('resolveRunTimeoutMs', () => {
@@ -318,5 +347,19 @@ describe('run CLI for agents', () => {
     expect(exitCode).toBe(124);
     expect(payload.timedOut).toBe(true);
     expect(payload.timeoutMs).toBe(200);
+  });
+
+  test('rejects an invalid --timeout instead of silently disabling the default', () => {
+    const ssh = writeScript('cli-unused-timeout.sh', 'exit 0');
+
+    const result = runCli(
+      ['run', 'prod-api', '--json', '--no-reuse', '--timeout', 'soon', '--', 'uptime'],
+      undefined,
+      { SSHYA_SSH_BIN: ssh, SSHYA_DB: writeCliDb() },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--timeout');
+    expect(result.stdout).toBe('');
   });
 });

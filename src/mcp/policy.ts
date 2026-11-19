@@ -61,12 +61,20 @@ export const aliasMatchesPattern = (alias: string, pattern: string): boolean =>
 
 export const createMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
   const aliasPatterns = normalizeAliasInput(options.aliases);
+  // A configured allowlist with zero usable patterns (for example `--aliases ,`
+  // or a trailing comma and an empty variable) means "allow nothing". Treating
+  // it as unset would silently expose every stored alias, which is the opposite
+  // of what the operator asked for.
+  const hasAliasAllowlist = options.aliases !== undefined;
   const matchers = aliasPatterns.map(aliasPatternToRegExp);
-  const hasAliasAllowlist = matchers.length > 0;
   const readOnly = options.readOnly === true;
 
-  const allowedAliasesLabel = (): string =>
-    aliasPatterns.length > 0 ? aliasPatterns.join(', ') : 'all stored aliases';
+  const allowedAliasesLabel = (): string => {
+    if (!hasAliasAllowlist) {
+      return 'all stored aliases';
+    }
+    return aliasPatterns.length > 0 ? aliasPatterns.join(', ') : 'none (empty allowlist)';
+  };
 
   return {
     aliasPatterns,
@@ -94,9 +102,12 @@ export const envFlagEnabled = (value?: string): boolean =>
  * omitted options fall back to `SSHYA_MCP_ALLOW` and `SSHYA_MCP_READ_ONLY`.
  */
 export const resolveMcpPolicy = (options: McpPolicyOptions = {}): McpPolicy => {
+  const envAllowlist = process.env.SSHYA_MCP_ALLOW?.trim();
   const aliases = options.aliases !== undefined
-    ? normalizeAliasInput(options.aliases)
-    : parseAliasList(process.env.SSHYA_MCP_ALLOW);
+    ? options.aliases
+    : envAllowlist
+      ? process.env.SSHYA_MCP_ALLOW
+      : undefined;
   const readOnly = options.readOnly ?? envFlagEnabled(process.env.SSHYA_MCP_READ_ONLY);
 
   return createMcpPolicy({ aliases, readOnly });

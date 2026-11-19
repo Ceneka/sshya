@@ -61,8 +61,9 @@
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
 - Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions plus the active policy)
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped, `cwd=true`
-- Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import
-- Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only protects the sshya store and sshya file writes, not the remote host
+- Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import. An allowlist that parses to zero patterns (for example `--aliases ,`) denies every alias instead of failing open.
+- Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
+- Guardrails: `copy`/`copy_file` refuse local operands that scp would interpret as remote (`host:path`) or that start with `-` (`errorKind: 'invalid-path'`), so a read-only download cannot become an upload to another host
 - Connections with `readonly: true` refuse `write_remote_file` and `copy_file` uploads (`errorKind: 'connection_readonly'`); `run_command` is not restricted by the flag
 - The active policy is exposed in server instructions and `sshya://guide`
 - Never call `process.exit` from a tool; return `{ ok, error }` with `isError` instead
@@ -85,6 +86,7 @@
 - Usage tracking via `lastUsed` timestamps
 - Interactive commands guard on `process.stdin.isTTY`; no-TTY runs fail instead of hanging
 - `run`/`test` default to `BatchMode=yes`, `-T`, and a connect timeout
+- Timeout values are clamped to the `setTimeout` maximum (2^31-1 ms), and `run --timeout` rejects non-numeric/negative values instead of silently disabling the default
 - Timeout exit code is `124`; otherwise SSH's exit code is passed through
 - Always includes `-t` for interactive sessions (required for a proper pseudo-terminal)
 - Timeouts kill the whole ssh process group (including helpers) and resolve even if pipes stay open

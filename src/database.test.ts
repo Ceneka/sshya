@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { initDB } from './database';
+import { getConnectionByAlias, initDB, upsertConnection } from './database';
 
 let previousDb: string | undefined;
 let tempDir: string;
@@ -51,5 +51,21 @@ describe('initDB', () => {
 
     const parsed = JSON.parse(fs.readFileSync(dbPath, 'utf8')) as Array<{ port: string }>;
     expect(parsed[0]?.port).toBe('22');
+  });
+
+  test('keeps readonly on overwrite unless it is explicitly cleared', () => {
+    fs.writeFileSync(
+      dbPath,
+      JSON.stringify([{ id: 1, alias: 'lab', user: 'cnk', host: '127.0.0.1', readonly: true }], null, 2),
+      'utf8',
+    );
+    initDB();
+
+    // An overwrite that does not mention readonly must not silently unlock it.
+    upsertConnection({ alias: 'lab', user: 'cnk', host: '203.0.113.9' }, true);
+    expect(getConnectionByAlias('lab')?.readonly).toBe(true);
+
+    upsertConnection({ alias: 'lab', user: 'cnk', host: '203.0.113.9', readonly: false }, true);
+    expect(getConnectionByAlias('lab')?.readonly).toBeUndefined();
   });
 });

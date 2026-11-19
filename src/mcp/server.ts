@@ -46,10 +46,9 @@ const readonlyConnectionDenial = (alias: string, action: string): ToolResult =>
   );
 
 const READ_ONLY_NOTE = [
-  'Read-only mode removes add_connection, update_connection, remove_connection, import_connections, and write_remote_file,',
-  'and restricts copy_file to direction="download".',
-  'run_command and run_on_many remain available: they execute arbitrary commands on the remote host,',
-  'so read-only mode protects the sshya store and file writes made through sshya, not the remote host.',
+  'Read-only mode removes store-mutating tools, refuses write_remote_file, and restricts copy_file to downloads.',
+  'run_command and run_on_many remain because they are arbitrary remote execution, and copy_file downloads still write local files at the caller-chosen path.',
+  'It therefore guards the sshya store against MCP mutations and the remote host against uploads; it does not sandbox the remote host or the local filesystem.',
 ].join(' ');
 
 const serializeConnection = (connection: Connection) => {
@@ -742,7 +741,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- `ok` is true only when the remote exit code is 0 and the command did not time out.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `unknown`, `ssh-missing`, plus policy kinds `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `invalid-path`, `unknown`, `ssh-missing`, plus policy kinds `alias_not_allowed`, `read_only`, and `connection_readonly`.',
           '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` for sudo.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
           '',
@@ -753,7 +752,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '',
           '## Safety',
           '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',
-          '- Read-only mode protects the sshya store and file writes made through sshya. It does not restrict the remote host: run_command and run_on_many can still change anything the SSH user can.',
+          '- Read-only mode guards the sshya store against MCP mutations and the remote host against uploads. It does not sandbox anything: run_command and run_on_many can still change anything the SSH user can, and copy_file downloads still write local files at the chosen path.',
           '- Connection details are stored locally in `~/.sshya/sshm.json`; set `SSHYA_DB` to isolate an agent workspace.',
         ].join('\n'),
       }],

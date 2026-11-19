@@ -193,14 +193,18 @@ SSHYA_MCP_ALLOW='web,stg-*' SSHYA_MCP_READ_ONLY=1 sshya mcp
 - `--read-only` / `SSHYA_MCP_READ_ONLY=1` does not register `add_connection`,
   `update_connection`, `remove_connection`, `import_connections`, or
   `write_remote_file`, and restricts `copy_file` to `direction: "download"`.
+- `copy`/`copy_file` refuse a local path that scp would reinterpret as a remote
+  target (`host:path`) or that starts with `-`, so a read-only download cannot
+  be turned into an upload to another host.
 - A connection can be marked `readonly: true` to refuse `write_remote_file` and
   `copy_file` uploads for that alias (`errorKind: "connection_readonly"`).
   `add_connection`, `update_connection`, and `import_connections` accept the
   flag, and `update_connection` with `readonly: false` clears it.
 
-Read-only mode protects the sshya store and file writes made through sshya. It
-does **not** sandbox the remote host: `run_command` and `run_on_many` remain
-available and execute arbitrary commands with the SSH user's permissions.
+Read-only mode guards the sshya store against MCP mutations and the remote host
+against uploads. It does **not** sandbox anything: `run_command` and
+`run_on_many` still execute arbitrary commands with the SSH user's permissions,
+and `copy_file` downloads still write local files at the caller-chosen path.
 
 
 ## Technology Stack
