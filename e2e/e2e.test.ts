@@ -7,6 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   CLI_VARIANTS,
   REPO_ROOT,
+  SSH_BIN,
   closeAllPools,
   createIsolation,
   delay,
@@ -122,6 +123,51 @@ interface CopyPayload {
   durationMs: number;
   errorKind?: string;
   hint?: string;
+}
+
+interface ReadFilePayload {
+  ok: boolean;
+  path: string;
+  content: string;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  truncated: boolean;
+  hint?: string;
+  error?: string;
+  errorKind?: string;
+}
+
+interface ReplaceFilePayload {
+  ok: boolean;
+  path: string;
+  replacements?: number;
+  diff?: string;
+  bytesWritten?: number;
+  mode?: string;
+  actualCount?: number;
+  expectedCount?: number;
+  matchLines?: number[];
+  error?: string;
+  errorKind?: string;
+  hint?: string;
+}
+
+interface GrepPayload {
+  ok: boolean;
+  matches: string[];
+  truncated: boolean;
+  error?: string;
+  errorKind?: string;
+  hint?: string;
+}
+
+interface StatPayload {
+  ok: boolean;
+  entries: Array<{ path: string; type: string; size?: number; mtime?: number; mode?: string }>;
+  truncated: boolean;
+  error?: string;
+  errorKind?: string;
 }
 
 interface PoolEntry {
@@ -859,6 +905,10 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
           'test_connection',
           'run_command',
           'run_on_many',
+          'read_remote_file',
+          'replace_in_remote_file',
+          'grep_remote',
+          'stat_remote',
           'write_remote_file',
           'copy_file',
           'print_ssh_command',
@@ -1201,6 +1251,682 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
       expect(initialize?.result?.serverInfo?.name).toBe('sshya');
       const tools = messages.find(message => message.id === 2);
       expect(Array.isArray(tools?.result?.tools)).toBe(true);
+    }, 60_000);
+  });
+
+  /**
+   * The file tools are unit-tested against a fake ssh that runs `sh -c` on the
+   * same machine. These tests go through the real sshd, a real login shell
+   * (zsh on this box), real `sed`/`awk`/`grep`/`stat`/`cksum`, and the real
+   * atomic temp-file + rename path.
+   */
+  describe('[mcp] remote file tools', () => {
+    let session: McpSession;
+
+    const quoteSh = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
+
+    const subdir = (name: string): { rel: string; abs: string } => {
+      const rel = path.posix.join('files', name);
+      const abs = path.join(mcpIsolation.remoteDir, rel);
+      fs.mkdirSync(abs, { recursive: true });
+      return { rel, abs };
+    };
+
+    const fileIn = (dir: { rel: string; abs: string }, name: string): { rel: string; abs: string } => ({
+      rel: path.posix.join(dir.rel, name),
+      abs: path.join(dir.abs, name),
+    });
+
+    /** Same minified/no-echo contract the other MCP responses follow. */
+    const expectCompact = (text: string, data: Record<string, unknown>, label: string): void => {
+      expect({ label, minified: text === JSON.stringify(data) }).toEqual({ label, minified: true });
+      expect({ label, singleLine: !text.includes('\n') }).toEqual({ label, singleLine: true });
+      for (const key of ['command', 'remoteCommand', 'target', 'cwd', 'stderr', 'signal', 'durationMs']) {
+        expect({ label, key, present: key in data }).toEqual({ label, key, present: false });
+      }
+      for (const [key, value] of Object.entries(data)) {
+        if (typeof value === 'string' && key !== 'content' && key !== 'diff') {
+          expect({ label, key, empty: value.length === 0 }).toEqual({ label, key, empty: false });
+        }
+      }
+    };
+
+    beforeAll(async () => {
+      session = await openMcp(mcpIsolation, []);
+    }, 30_000);
+
+    afterAll(async () => {
+      if (session) {
+        await session.close();
+      }
+    });
+
+    test('reads numbered ranges, totalLines, and past-EOF offsets', async () => {
+      const dir = subdir('read-range');
+      const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
+      const target = fileIn(dir, 'app.conf');
+      fs.writeFileSync(target.abs, `${lines.join('\n')}\n`);
+
+      const all = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: target.rel,
+      });
+      expect(all.isError).toBe(false);
+      expect(all.data).toMatchObject({
+        ok: true,
+        path: target.rel,
+        startLine: 1,
+        endLine: 12,
+        totalLines: 12,
+        truncated: false,
+      });
+      expect(all.data.content).toBe(
+        lines.map((line, index) => `${String(index + 1).padStart(4)}\t${line}`).join('\n') + '\n',
+      );
+      expectCompact(all.text, all.data as unknown as Record<string, unknown>, 'read all');
+
+      const range = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: target.rel,
+        offset: 3,
+        limit: 4,
+      });
+      expect(range.data).toMatchObject({ startLine: 3, endLine: 6, totalLines: 12, truncated: true });
+      expect(range.data.content).toBe('   3\tline 3\n   4\tline 4\n   5\tline 5\n   6\tline 6\n');
+
+      const past = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: target.rel,
+        offset: 99,
+      });
+      expect(past.isError).toBe(false);
+      expect(past.data).toMatchObject({
+        ok: true, content: '', startLine: 99, endLine: 98, totalLines: 12, truncated: false,
+      });
+      expect(past.data.hint).toContain('past the end');
+    }, 60_000);
+
+    test('preserves multibyte text and never splits a code point when capped', async () => {
+      const dir = subdir('read-utf8');
+      const text = fileIn(dir, 'utf8.txt');
+      fs.writeFileSync(text.abs, 'café 😀\nüber €\n');
+
+      const full = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: text.rel,
+      });
+      expect(full.isError).toBe(false);
+      expect(full.data.content).toBe('   1\tcafé 😀\n   2\tüber €\n');
+      expect(full.data.totalLines).toBe(2);
+
+      // A single 12,000-byte line forces the byte cap to land inside a
+      // multibyte character at both the `dd` block and the local cut.
+      const long = fileIn(dir, 'long.txt');
+      fs.writeFileSync(long.abs, `${'€'.repeat(4000)}\n`);
+      const capped = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: long.rel,
+        lineNumbers: false,
+        maxBytes: 1000,
+      });
+      expect(capped.isError).toBe(false);
+      expect(capped.data.truncated).toBe(true);
+      expect(capped.data.content.length).toBeGreaterThan(0);
+      expect(Buffer.byteLength(capped.data.content, 'utf8')).toBeLessThanOrEqual(1000);
+      expect(capped.data.content).not.toContain('\uFFFD');
+      expect(capped.data.content).toBe('€'.repeat(capped.data.content.length));
+    }, 60_000);
+
+    test('reports missing, directory, permission-denied, binary, and oversized errors', async () => {
+      const dir = subdir('read-errors');
+      fs.writeFileSync(fileIn(dir, 'blob.bin').abs, Buffer.from([0x41, 0x00, 0x42, 0x0a]));
+      fs.writeFileSync(fileIn(dir, 'huge.conf').abs, Buffer.alloc(2 * 1024 * 1024 + 1, 0x61));
+      const secret = fileIn(dir, 'secret.conf');
+      fs.writeFileSync(secret.abs, 'secret\n');
+      fs.chmodSync(secret.abs, 0o000);
+
+      try {
+        const missing = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+          alias: 'alpha',
+          path: fileIn(dir, 'nope.conf').rel,
+        });
+        expect(missing.isError).toBe(true);
+        expect(missing.data.errorKind).toBe('not_found');
+        expect(missing.data.hint).toContain('remote_path');
+
+        const directory = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+          alias: 'alpha',
+          path: dir.rel,
+        });
+        expect(directory.isError).toBe(true);
+        expect(directory.data.errorKind).toBe('is_a_directory');
+
+        const binary = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+          alias: 'alpha',
+          path: fileIn(dir, 'blob.bin').rel,
+        });
+        expect(binary.isError).toBe(true);
+        expect(binary.data.errorKind).toBe('binary_file');
+
+        if (!(typeof process.getuid === 'function' && process.getuid() === 0)) {
+          const denied = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+            alias: 'alpha',
+            path: secret.rel,
+          });
+          expect(denied.isError).toBe(true);
+          expect(denied.data.errorKind).toBe('permission_denied');
+        }
+
+        const oversized = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+          alias: 'alpha',
+          path: fileIn(dir, 'huge.conf').rel,
+          oldText: 'aaaa',
+          newText: 'bbbb',
+        });
+        expect(oversized.isError).toBe(true);
+        expect(oversized.data.errorKind).toBe('file_too_large');
+
+        const replaceDirectory = await callToolJson<ReplaceFilePayload>(
+          session.client,
+          'replace_in_remote_file',
+          { alias: 'alpha', path: dir.rel, oldText: 'a', newText: 'b' },
+        );
+        expect(replaceDirectory.isError).toBe(true);
+        expect(replaceDirectory.data.errorKind).toBe('is_a_directory');
+      } finally {
+        fs.chmodSync(secret.abs, 0o644);
+      }
+    }, 60_000);
+
+    test('fails with match_count and line numbers, then replaces with expectedCount', async () => {
+      const dir = subdir('replace');
+      const dupes = fileIn(dir, 'dupes.conf');
+      fs.writeFileSync(dupes.abs, 'x\ny\nx\n');
+
+      const mismatch = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: dupes.rel,
+        oldText: 'x',
+        newText: 'z',
+      });
+      expect(mismatch.isError).toBe(true);
+      expect(mismatch.data).toMatchObject({
+        ok: false,
+        path: dupes.rel,
+        errorKind: 'match_count',
+        actualCount: 2,
+        expectedCount: 1,
+        matchLines: [1, 3],
+      });
+      expect(mismatch.data.error).toContain('2 time(s)');
+      expect(fs.readFileSync(dupes.abs, 'utf8')).toBe('x\ny\nx\n');
+
+      const vars = fileIn(dir, 'vars.conf');
+      fs.writeFileSync(vars.abs, 'a=1\nb=2\na=3\n');
+      const multi = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: vars.rel,
+        oldText: 'a=',
+        newText: 'A=',
+        expectedCount: 2,
+      });
+      expect(multi.isError).toBe(false);
+      expect(multi.data.replacements).toBe(2);
+      expect(multi.data.bytesWritten).toBe(Buffer.byteLength('A=1\nb=2\nA=3\n'));
+      expect(multi.data.diff).toContain('-a=1');
+      expect(multi.data.diff).toContain('+A=1');
+      expect(fs.readFileSync(vars.abs, 'utf8')).toBe('A=1\nb=2\nA=3\n');
+      expectCompact(multi.text, multi.data as unknown as Record<string, unknown>, 'replace multi');
+    }, 60_000);
+
+    test('detects a concurrent modification before the atomic write', async () => {
+      const dir = subdir('replace-conflict');
+      const target = fileIn(dir, 'race.conf');
+      fs.writeFileSync(target.abs, 'original\n');
+      const marker = path.join(mcpIsolation.tmpDir, `drift-${Date.now()}`);
+
+      // The tool reads, then writes in a second ssh invocation. A wrapper that
+      // execs the real ssh can inject the "someone else edited it" event
+      // deterministically: it fires on the first command that carries the
+      // .sshya-tmp temp path (the write), then lets the real sshd run it.
+      const wrapper = path.join(mcpIsolation.tmpDir, `ssh-drift-${Date.now()}.sh`);
+      fs.writeFileSync(wrapper, [
+        '#!/bin/sh',
+        `__target=${quoteSh(target.abs)}`,
+        `__marker=${quoteSh(marker)}`,
+        'for __arg in "$@"; do',
+        '  case "$__arg" in',
+        '    *sshya-tmp*)',
+        '      if [ ! -f "$__marker" ]; then',
+        '        printf "drift\\n" >> "$__target"',
+        '        : > "$__marker"',
+        '      fi',
+        '      ;;',
+        '  esac',
+        'done',
+        `exec ${quoteSh(SSH_BIN)} -o UserKnownHostsFile=${quoteSh(mcpIsolation.knownHosts)} -o GlobalKnownHostsFile=/dev/null "$@"`,
+        '',
+      ].join('\n'), { mode: 0o755 });
+
+      const drift = await openMcp(mcpIsolation, [], { SSHYA_SSH_BIN: wrapper });
+      try {
+        const result = await callToolJson<ReplaceFilePayload>(drift.client, 'replace_in_remote_file', {
+          alias: 'alpha',
+          path: target.rel,
+          oldText: 'original',
+          newText: 'changed',
+        });
+        expect(result.isError).toBe(true);
+        expect(result.data.errorKind).toBe('conflict');
+        expect(result.data.hint).toContain('Re-read');
+        expect(fs.readFileSync(target.abs, 'utf8')).toBe('original\ndrift\n');
+        expect(fs.readdirSync(dir.abs).filter(name => name.includes('.sshya-tmp'))).toEqual([]);
+      } finally {
+        await drift.close();
+      }
+    }, 60_000);
+
+    test('preserves mode and owner across an atomic replace', async () => {
+      const dir = subdir('replace-meta');
+      const target = fileIn(dir, 'edit.conf');
+      fs.writeFileSync(target.abs, 'server {\n  port 80;\n}\n');
+      fs.chmodSync(target.abs, 0o640);
+      const before = fs.statSync(target.abs);
+
+      const result = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: target.rel,
+        oldText: 'port 80',
+        newText: 'port 8080',
+      });
+      expect(result.isError).toBe(false);
+      expect(result.data).toMatchObject({ ok: true, replacements: 1, mode: '640' });
+      expect(fs.readFileSync(target.abs, 'utf8')).toBe('server {\n  port 8080;\n}\n');
+
+      const after = fs.statSync(target.abs);
+      expect(after.mode & 0o777).toBe(0o640);
+      expect(after.uid).toBe(before.uid);
+      expect(after.gid).toBe(before.gid);
+      // A rename into place means a different inode than the original file.
+      expect(after.ino).not.toBe(before.ino);
+      expect(fs.readdirSync(dir.abs).filter(name => name.includes('.sshya-tmp'))).toEqual([]);
+    }, 60_000);
+
+    test('write_remote_file atomic=true renames into place and keeps the mode', async () => {
+      const dir = subdir('write-atomic');
+      const existing = fileIn(dir, 'config.yml');
+      fs.writeFileSync(existing.abs, 'port: 8080\n');
+      fs.chmodSync(existing.abs, 0o640);
+      const before = fs.statSync(existing.abs);
+
+      const written = await callToolJson<{
+        ok: boolean;
+        path: string;
+        bytesWritten: number;
+        atomic?: boolean;
+      }>(session.client, 'write_remote_file', {
+        alias: 'alpha',
+        path: existing.rel,
+        content: 'port: 9090\nworkers: 4\n',
+        atomic: true,
+      });
+      expect(written.isError).toBe(false);
+      expect(written.data).toMatchObject({
+        ok: true, path: existing.rel, bytesWritten: 22, atomic: true,
+      });
+      expectCompact(written.text, written.data as unknown as Record<string, unknown>, 'write atomic');
+
+      expect(fs.readFileSync(existing.abs, 'utf8')).toBe('port: 9090\nworkers: 4\n');
+      const after = fs.statSync(existing.abs);
+      expect(after.mode & 0o777).toBe(0o640);
+      expect(after.ino).not.toBe(before.ino);
+      expect(fs.readdirSync(dir.abs).filter(name => name.includes('.sshya-tmp'))).toEqual([]);
+
+      // Multibyte content is verified by byte count, not character count.
+      const multibyte = fileIn(dir, 'utf8.conf');
+      const utf8 = await callToolJson<{ ok: boolean; bytesWritten: number }>(
+        session.client,
+        'write_remote_file',
+        { alias: 'alpha', path: multibyte.rel, content: '€\n', atomic: true },
+      );
+      expect(utf8.data).toMatchObject({ ok: true, bytesWritten: 4 });
+      expect(fs.readFileSync(multibyte.abs, 'utf8')).toBe('€\n');
+    }, 60_000);
+
+    test('handles paths with spaces, quotes, $(), a leading dash, and ~/', async () => {
+      const dir = subdir('weird');
+      const cases: Array<{ name: string; body: string }> = [
+        { name: 'sp ace.txt', body: 'space ok\n' },
+        { name: `qu'ote".txt`, body: 'quote ok\n' },
+        { name: 'dollar $(touch PWNED).txt', body: 'dollar ok\n' },
+        { name: '-dash.txt', body: 'dash ok\n' },
+      ];
+      for (const entry of cases) {
+        fs.writeFileSync(fileIn(dir, entry.name).abs, entry.body);
+      }
+
+      for (const entry of cases) {
+        const target = fileIn(dir, entry.name);
+        const read = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+          alias: 'alpha',
+          path: target.rel,
+        });
+        expect({ name: entry.name, error: read.isError }).toEqual({ name: entry.name, error: false });
+        expect(read.data.content).toBe(`   1\t${entry.body.trimEnd()}\n`);
+      }
+
+      expect(fs.existsSync(path.join(mcpIsolation.remoteDir, 'PWNED'))).toBe(false);
+      expect(fs.existsSync(path.join(dir.abs, 'PWNED'))).toBe(false);
+
+      const renamed = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: fileIn(dir, 'sp ace.txt').rel,
+        oldText: 'space',
+        newText: 'spaced',
+      });
+      expect(renamed.isError).toBe(false);
+      expect(fs.readFileSync(fileIn(dir, 'sp ace.txt').abs, 'utf8')).toBe('spaced ok\n');
+
+      const quoted = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: fileIn(dir, `qu'ote".txt`).rel,
+        oldText: 'quote',
+        newText: 'quoted',
+      });
+      expect(quoted.isError).toBe(false);
+      expect(fs.readFileSync(fileIn(dir, `qu'ote".txt`).abs, 'utf8')).toBe('quoted ok\n');
+
+      const dollar = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: fileIn(dir, 'dollar $(touch PWNED).txt').rel,
+        oldText: 'dollar',
+        newText: 'dollars',
+      });
+      expect(dollar.isError).toBe(false);
+      expect(fs.readFileSync(fileIn(dir, 'dollar $(touch PWNED).txt').abs, 'utf8')).toBe('dollars ok\n');
+      expect(fs.existsSync(path.join(mcpIsolation.remoteDir, 'PWNED'))).toBe(false);
+
+      const dashReplace = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: fileIn(dir, '-dash.txt').rel,
+        oldText: 'dash',
+        newText: 'dashed',
+      });
+      expect(dashReplace.isError).toBe(false);
+      expect(fs.readFileSync(fileIn(dir, '-dash.txt').abs, 'utf8')).toBe('dashed ok\n');
+
+      // A path that starts with `-` must be passed as `./-name`; otherwise
+      // sed/stat/grep would parse it as an option.
+      const rootDash = path.join(mcpIsolation.remoteDir, '-root-dash.conf');
+      fs.writeFileSync(rootDash, 'root dash\n');
+      const dashRead = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: '-root-dash.conf',
+      });
+      expect(dashRead.isError).toBe(false);
+      expect(dashRead.data.content).toBe('   1\troot dash\n');
+
+      const dashStat = await callToolJson<StatPayload>(session.client, 'stat_remote', {
+        alias: 'alpha',
+        paths: ['-root-dash.conf'],
+      });
+      expect(dashStat.data.entries[0]).toMatchObject({ path: '-root-dash.conf', type: 'file' });
+
+      const dashRootReplace = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+        alias: 'alpha',
+        path: '-root-dash.conf',
+        oldText: 'root dash',
+        newText: 'root dashed',
+      });
+      expect(dashRootReplace.isError).toBe(false);
+      expect(fs.readFileSync(rootDash, 'utf8')).toBe('root dashed\n');
+
+      // Atomic writes derive a temp name from these paths too.
+      const weirdOut = fileIn(dir, 'out $(touch PWNED2) \'x\'.txt');
+      const weirdWrite = await callToolJson<{ ok: boolean; bytesWritten: number; atomic?: boolean }>(
+        session.client,
+        'write_remote_file',
+        { alias: 'alpha', path: weirdOut.rel, content: 'weird write\n', atomic: true },
+      );
+      expect(weirdWrite.isError).toBe(false);
+      expect(weirdWrite.data).toMatchObject({ ok: true, bytesWritten: 12, atomic: true });
+      expect(fs.readFileSync(weirdOut.abs, 'utf8')).toBe('weird write\n');
+      expect(fs.existsSync(path.join(mcpIsolation.remoteDir, 'PWNED2'))).toBe(false);
+
+      const weirdStat = await callToolJson<StatPayload>(session.client, 'stat_remote', {
+        alias: 'alpha',
+        paths: cases.map(entry => fileIn(dir, entry.name).rel),
+      });
+      expect(weirdStat.isError).toBe(false);
+      expect(weirdStat.data.entries.map(entry => entry.type)).toEqual(['file', 'file', 'file', 'file']);
+
+      // `~` must expand to $HOME instead of a literal "~" directory.
+      const homeRead = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+        alias: 'alpha',
+        path: '~',
+      });
+      expect(homeRead.isError).toBe(true);
+      expect(homeRead.data.errorKind).toBe('is_a_directory');
+
+      const homeStat = await callToolJson<StatPayload>(session.client, 'stat_remote', {
+        alias: 'alpha',
+        paths: ['~', `~/sshya-e2e-missing-${Date.now()}.conf`],
+      });
+      expect(homeStat.isError).toBe(false);
+      expect(homeStat.data.entries[0]).toMatchObject({ path: '~', type: 'directory' });
+      expect(homeStat.data.entries[0]?.mode).toBeDefined();
+      expect(homeStat.data.entries[1]?.type).toBe('missing');
+    }, 60_000);
+
+    test('grep_remote supports regex, fixed strings, globs, dash patterns, and limits', async () => {
+      const dir = subdir('grep');
+      fs.mkdirSync(path.join(dir.abs, 'sub'), { recursive: true });
+      fs.writeFileSync(fileIn(dir, 'a.conf').abs, 'alpha\nneedle here\na.b\naxb\n-foo bar\n');
+      fs.writeFileSync(path.join(dir.abs, 'sub', 'c.conf'), 'needle deep\n');
+      fs.writeFileSync(fileIn(dir, 'b.txt').abs, 'needle too\n');
+      fs.writeFileSync(fileIn(dir, 'many.log').abs, 'needle 1\nneedle 2\nneedle 3\n');
+      const dashDir = path.join(mcpIsolation.remoteDir, '-dashdir');
+      fs.mkdirSync(dashDir, { recursive: true });
+      fs.writeFileSync(path.join(dashDir, 'f.txt'), 'needle in dashdir\n');
+
+      const regex = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'a.b',
+        path: fileIn(dir, 'a.conf').rel,
+      });
+      expect(regex.isError).toBe(false);
+      expect(regex.data.matches).toEqual([`${fileIn(dir, 'a.conf').rel}:3:a.b`, `${fileIn(dir, 'a.conf').rel}:4:axb`]);
+      expectCompact(regex.text, regex.data as unknown as Record<string, unknown>, 'grep regex');
+
+      const fixed = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'a.b',
+        fixed: true,
+        path: fileIn(dir, 'a.conf').rel,
+      });
+      expect(fixed.data.matches).toEqual([`${fileIn(dir, 'a.conf').rel}:3:a.b`]);
+
+      const globbed = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'needle',
+        glob: '*.conf',
+        path: dir.rel,
+      });
+      expect(globbed.data.matches.sort()).toEqual([
+        `${fileIn(dir, 'a.conf').rel}:2:needle here`,
+        `${path.posix.join(dir.rel, 'sub/c.conf')}:1:needle deep`,
+      ]);
+
+      const dashPattern = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: '-foo',
+        fixed: true,
+        path: dir.rel,
+      });
+      expect(dashPattern.data.matches).toEqual([`${fileIn(dir, 'a.conf').rel}:5:-foo bar`]);
+
+      const dashPath = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'needle',
+        path: '-dashdir',
+      });
+      expect(dashPath.isError).toBe(false);
+      expect(dashPath.data.matches).toEqual(['-dashdir/f.txt:1:needle in dashdir']);
+
+      const limited = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'needle',
+        path: fileIn(dir, 'many.log').rel,
+        maxMatches: 2,
+      });
+      expect(limited.data.matches).toEqual([
+        `${fileIn(dir, 'many.log').rel}:1:needle 1`,
+        `${fileIn(dir, 'many.log').rel}:2:needle 2`,
+      ]);
+      expect(limited.data.truncated).toBe(true);
+
+      const none = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'absent-everywhere',
+        path: dir.rel,
+      });
+      expect(none.isError).toBe(false);
+      expect(none.data).toMatchObject({ ok: true, matches: [], truncated: false });
+
+      const missing = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: 'needle',
+        path: fileIn(dir, 'nope').rel,
+      });
+      expect(missing.isError).toBe(true);
+      expect(missing.data.errorKind).toBe('not_found');
+
+      const invalid = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+        alias: 'alpha',
+        pattern: '[',
+        path: dir.rel,
+      });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.data.errorKind).toBe('invalid_pattern');
+    }, 60_000);
+
+    test('stat_remote reports file, directory, symlink, and missing entries', async () => {
+      const dir = subdir('stat');
+      const target = fileIn(dir, 'stat.conf');
+      fs.writeFileSync(target.abs, '12345\n');
+      fs.chmodSync(target.abs, 0o644);
+      fs.mkdirSync(path.join(dir.abs, 'nested'));
+      fs.symlinkSync(target.abs, path.join(dir.abs, 'link.conf'));
+
+      const result = await callToolJson<StatPayload>(session.client, 'stat_remote', {
+        alias: 'alpha',
+        paths: [target.rel, path.posix.join(dir.rel, 'nested'), path.posix.join(dir.rel, 'nope'), path.posix.join(dir.rel, 'link.conf')],
+      });
+      expect(result.isError).toBe(false);
+      const [fileEntry, dirEntry, missing, linkEntry] = result.data.entries;
+      expect(fileEntry).toMatchObject({ path: target.rel, type: 'file', size: 6, mode: '644' });
+      expect(fileEntry?.mtime).toBeGreaterThan(0);
+      expect(dirEntry).toMatchObject({ path: path.posix.join(dir.rel, 'nested'), type: 'directory' });
+      expect(missing).toEqual({ path: path.posix.join(dir.rel, 'nope'), type: 'missing' });
+      // `stat` does not follow symlinks: size is the link target's path length
+      // and type is "symlink", so a broken link is still reportable.
+      expect(linkEntry).toMatchObject({
+        path: path.posix.join(dir.rel, 'link.conf'),
+        type: 'symlink',
+        size: Buffer.byteLength(target.abs),
+      });
+      expect(linkEntry?.mode).toBeDefined();
+      expect(result.data.truncated).toBe(false);
+      expectCompact(result.text, result.data as unknown as Record<string, unknown>, 'stat');
+    }, 60_000);
+
+    test('read-only mode keeps read/grep/stat and drops replace', async () => {
+      const dir = subdir('read-only');
+      const target = fileIn(dir, 'ro.conf');
+      fs.writeFileSync(target.abs, 'one\n');
+
+      const readonly = await openMcp(mcpIsolation, ['--read-only']);
+      try {
+        const tools = (await readonly.client.listTools()).tools.map(tool => tool.name);
+        for (const present of ['read_remote_file', 'grep_remote', 'stat_remote']) {
+          expect(tools).toContain(present);
+        }
+        expect(tools).not.toContain('replace_in_remote_file');
+        expect(tools).not.toContain('write_remote_file');
+
+        const read = await callToolJson<ReadFilePayload>(readonly.client, 'read_remote_file', {
+          alias: 'alpha', path: target.rel,
+        });
+        expect(read.isError).toBe(false);
+        expect(read.data.content).toBe('   1\tone\n');
+
+        const grep = await callToolJson<GrepPayload>(readonly.client, 'grep_remote', {
+          alias: 'alpha', pattern: 'one', path: dir.rel,
+        });
+        expect(grep.data.matches).toEqual([`${target.rel}:1:one`]);
+
+        const stat = await callToolJson<StatPayload>(readonly.client, 'stat_remote', {
+          alias: 'alpha', paths: [target.rel],
+        });
+        expect(stat.data.entries[0]).toMatchObject({ path: target.rel, type: 'file' });
+
+        expect(fs.readFileSync(target.abs, 'utf8')).toBe('one\n');
+        expect(readonly.stderr()).toBe('');
+      } finally {
+        await readonly.close();
+      }
+    }, 60_000);
+
+    test('per-connection readonly refuses replace but allows read, grep, and stat', async () => {
+      const dir = subdir('connection-readonly');
+      const target = fileIn(dir, 'locked.conf');
+      fs.writeFileSync(target.abs, 'unchanged\n');
+
+      const added = await callToolJson<{ ok: boolean; created: boolean }>(
+        session.client,
+        'add_connection',
+        {
+          alias: 'files-ro',
+          user: sshd.user,
+          host: sshd.host,
+          port: sshd.port,
+          keyPath: sshd.clientKeyPath,
+          remotePath: mcpIsolation.remoteDir,
+          readonly: true,
+        },
+      );
+      expect(added.isError).toBe(false);
+      expect(added.data.created).toBe(true);
+
+      try {
+        const read = await callToolJson<ReadFilePayload>(session.client, 'read_remote_file', {
+          alias: 'files-ro', path: target.rel,
+        });
+        expect(read.isError).toBe(false);
+        expect(read.data.content).toBe('   1\tunchanged\n');
+
+        const grep = await callToolJson<GrepPayload>(session.client, 'grep_remote', {
+          alias: 'files-ro', pattern: 'unchanged', path: dir.rel,
+        });
+        expect(grep.data.matches).toEqual([`${target.rel}:1:unchanged`]);
+
+        const stat = await callToolJson<StatPayload>(session.client, 'stat_remote', {
+          alias: 'files-ro', paths: [target.rel],
+        });
+        expect(stat.data.entries[0]).toMatchObject({ path: target.rel, type: 'file' });
+
+        const refused = await callToolJson<ReplaceFilePayload>(session.client, 'replace_in_remote_file', {
+          alias: 'files-ro',
+          path: target.rel,
+          oldText: 'unchanged',
+          newText: 'changed',
+        });
+        expect(refused.isError).toBe(true);
+        expect(refused.data.errorKind).toBe('connection_readonly');
+        expect(fs.readFileSync(target.abs, 'utf8')).toBe('unchanged\n');
+      } finally {
+        await callToolJson(session.client, 'remove_connection', { alias: 'files-ro' });
+      }
     }, 60_000);
   });
 });
