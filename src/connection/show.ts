@@ -1,6 +1,5 @@
 import chalk from 'chalk';
-import { getConnectionByAlias } from '../database';
-import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand } from '../helpers/ssh';
 import { jsonEnabled, printJson } from '../output';
 
@@ -25,18 +24,26 @@ export async function showConnectionPrompt(alias?: string, options: ShowOptions 
     alias = await selectAlias('Select a connection to show');
   }
 
-  const resolvedAlias = getConnectionByAlias(alias) ? alias : findAliasBySearchTerm(alias);
-  const connection = resolvedAlias ? getConnectionByAlias(resolvedAlias) : undefined;
+  const lookup = resolveAliasForCommand(alias, { json });
 
-  if (!connection) {
+  if (!lookup.ok) {
     if (json) {
-      printJson({ ok: false, error: `Alias not found: ${alias}` });
+      printJson({
+        ok: false,
+        error: `Alias not found: ${alias}`,
+        suggestions: lookup.suggestions,
+      });
     } else {
       console.error(chalk.red(`Alias not found: ${alias}`));
+      if (lookup.suggestions.length > 0) {
+        console.error(chalk.grey(`Did you mean: ${lookup.suggestions.join(', ')}?`));
+      }
     }
     process.exitCode = 1;
     return;
   }
+
+  const connection = lookup.connection;
 
   const sshArgs = buildSshArgs(connection);
   const interactiveArgs = buildInteractiveSshArgs(connection);

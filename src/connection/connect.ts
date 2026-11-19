@@ -1,28 +1,27 @@
 import chalk from 'chalk';
 import { spawn } from 'child_process';
-import { getConnectionByAlias, recordConnectionUsage } from '../database';
+import { recordConnectionUsage } from '../database';
 import { buildInteractiveSshArgs } from '../helpers/ssh';
-import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 
 export async function connectConnectionPrompt(alias?: string): Promise<void> {
     if (!alias) {
         alias = await selectAlias('Select a connection to connect');
     }
 
-    let connection = getConnectionByAlias(alias);
-    if (!connection) {
-        const matchedAlias = findAliasBySearchTerm(alias);
-        if (matchedAlias) {
-            alias = matchedAlias;
-            connection = getConnectionByAlias(alias);
-        }
-    }
+    // `connect` is interactive by nature: a typo may fuzzy-match when both
+    // stdin and stdout are TTYs. JSON mode and pipes stay exact-only.
+    const lookup = resolveAliasForCommand(alias);
 
-    if (!connection) {
+    if (!lookup.ok) {
         console.error(chalk.red(`Alias not found: ${alias}`));
+        if (lookup.suggestions.length > 0) {
+            console.error(chalk.grey(`Did you mean: ${lookup.suggestions.join(', ')}?`));
+        }
         process.exit(1);
     }
 
+    const connection = lookup.connection;
     const args = buildInteractiveSshArgs(connection);
 
     recordConnectionUsage(connection.alias);
