@@ -7,6 +7,7 @@ import pkg from './package.json' with { type: "json" };
 import { initDB } from './src/database';
 import { parseByteSize, type CaptureMode } from './src/helpers/capture';
 import type { HostKeyChecking } from './src/helpers/ssh';
+import { jsonEnabled } from './src/output';
 
 const version = pkg?.version ?? '1.0.0';
 
@@ -21,12 +22,22 @@ const program = new Command();
 
 // Initialize the store lazily, only when a command actually runs. `--version`,
 // `--help`, and a bare `sshya` must not create or rewrite the database.
-program.hook('preAction', (_thisCommand, actionCommand) => {
+// Commands that read connections refresh linked (lazybackup) entries first.
+// The refresh is TTL-gated, time-boxed, and falls back to the cached store.
+const AUTO_SYNC_COMMANDS = new Set([
+  'connect', 'run', 'copy', 'print', 'show', 'list', 'remove', 'update', 'test', 'doctor', 'export', 'fzf',
+]);
+
+program.hook('preAction', async (_thisCommand, actionCommand) => {
   const commandName = actionCommand.name();
   if (commandName === 'about' || commandName === 'path') {
     return;
   }
   initDB();
+  if (AUTO_SYNC_COMMANDS.has(commandName) && actionCommand.parent?.name() !== 'link') {
+    const { autoSyncForCli } = await import('./src/link/commands');
+    await autoSyncForCli(jsonEnabled(actionCommand.opts().json === true));
+  }
 });
 
 const secondsToMs = (value?: string): number | undefined => {
@@ -381,6 +392,52 @@ program
       readOnly: options.readOnly === true ? true : undefined,
     });
   });
+
+const link = program
+  .command('link')
+  .description('Link sshya to a lazybackup instance that manages your servers (web is the source of truth)');
+
+link
+  .command('set [url]')
+  .description('Configure the lazybackup URL and credentials, then sync')
+  .option('--token <token>', 'lazybackup API token (Settings → API / MCP; read_only is enough)')
+  .option('--token-stdin', 'Read the API token from stdin')
+  .option('--cf-client-id <id>', 'Cloudflare Access service token client id')
+  .option('--cf-client-secret <secret>', 'Cloudflare Access service token client secret')
+  .option('--ttl <seconds>', 'Auto-sync freshness window (0 disables auto-sync, default 300)')
+  .option('--no-sync', 'Save the link without syncing now')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (url: string | undefined, options) => (await import('./src/link/commands')).linkSetCommand(url, options));
+
+link
+  .command('show', { isDefault: true })
+  .aliases(['status'])
+  .description('Show the link configuration and last sync')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (options: { json?: boolean }) => (await import('./src/link/commands')).linkShowCommand(options));
+
+link
+  .command('key [key] [path]')
+  .aliases(['keys'])
+  .description('List lazybackup stored keys, or map one to a local private key file')
+  .option('--unset', 'Remove the local mapping for this key')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (key: string | undefined, keyPath: string | undefined, options: { unset?: boolean; json?: boolean }) =>
+    (await import('./src/link/commands')).linkKeyCommand(key, keyPath, options));
+
+link
+  .command('unset')
+  .aliases(['remove'])
+  .description('Remove the link; linked connections stay as local entries unless --purge')
+  .option('--purge', 'Also delete the connections that came from lazybackup')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (options: { purge?: boolean; json?: boolean }) => (await import('./src/link/commands')).linkUnsetCommand(options));
+
+program
+  .command('sync')
+  .description('Pull servers from the linked lazybackup instance now')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (options: { json?: boolean }) => (await import('./src/link/commands')).syncCommand(options));
 
 program
   .command('path')

@@ -11,6 +11,7 @@ This project is a command-line interface (CLI) tool named `sshya` for managing S
 - Import and export connections from/to a JSON file, including stdin/stdout.
 - Optional fzf picker with `sshya fzf`.
 - Agent interface with non-interactive flags, `--json`, exit codes, and an MCP server (`sshya mcp`).
+- Optional link to a [lazybackup](https://github.com/Ceneka/lazybackup) instance so its web UI manages your servers (`sshya link`, `sshya sync`).
 
 ## Agent / LLM usage
 
@@ -100,6 +101,10 @@ Notes for scripting:
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
 | `SSHYA_MCP_ALLOW` | unset | Alias allowlist for `sshya mcp` (comma-separated, supports `*`/`?` globs) |
 | `SSHYA_MCP_READ_ONLY` | unset | `1` removes MCP tools that mutate the store or write files |
+| `SSHYA_LINK_URL` / `SSHYA_LINK_TOKEN` | unset | Override the lazybackup link URL/token from `link.json` |
+| `SSHYA_CF_ACCESS_CLIENT_ID` / `SSHYA_CF_ACCESS_CLIENT_SECRET` | unset | Cloudflare Access service token for the link |
+| `SSHYA_LINK_TTL` | `300` | Seconds before auto-sync refreshes linked connections (`0` disables) |
+| `SSHYA_LINK_AUTO` | on | `0` disables auto-sync (manual `sshya sync` still works) |
 
 ### MCP client setup
 
@@ -343,6 +348,44 @@ The `copy` command also works as `sshya sc` or `sshya scp`.
 
 Relative remote paths are resolved from the connection's saved remote working directory when one is configured.
 If an exact alias is not found, `connect` and `copy` use the first fuzzy match from the same search used by the interactive picker.
+
+### Manage servers from lazybackup
+
+If you run [lazybackup](https://github.com/Ceneka/lazybackup), its web UI can be
+the single place where servers are managed. sshya pulls them over the API and
+keeps a local cache, so `s`, `run`, and MCP keep working offline.
+
+```bash
+# lazybackup → Settings → API / MCP → create a token (read_only is enough)
+sshya link set https://backup.example.com --token lb_xxx
+# behind Cloudflare Access: add a service token
+sshya link set https://backup.example.com --token lb_xxx \
+  --cf-client-id <id>.access --cf-client-secret <secret>
+# or pipe the token so it stays out of shell history
+pass lazybackup/token | sshya link set https://backup.example.com --token-stdin
+
+sshya sync          # pull now (also runs automatically every 5 min when used)
+sshya link show     # URL, masked secrets, last sync / last error
+sshya link unset    # stop syncing; linked entries become local (--purge deletes them)
+```
+
+How it maps:
+
+- The alias is the lazybackup server name, slugified (`Web Prod` → `web-prod`).
+- Keys: lazybackup's `systemKeyPath` (or a stored key's path) is translated from
+  the container mount `/root/.ssh` to `~/.ssh`, falling back to
+  `~/.ssh/<basename>`. Keys pasted into lazybackup are never exported: map each
+  one once per machine with `sshya link key <id|name> <path>` and every server
+  using it picks it up (`sshya link key` lists keys, their servers, and mappings).
+  `sshya update <alias> --key <path>` still overrides a single connection.
+- Linked connections are read-only for alias/user/host/port and cannot be
+  removed locally (`errorKind: linked_connection`). `key_path`, `remote_path`,
+  `readonly`, and usage history stay local.
+- Local connections with the same alias and target are adopted; a different
+  target with the same alias is reported as a conflict and left untouched.
+- Servers deleted in lazybackup are removed locally on the next sync. Purely
+  local connections are never touched.
+- Config lives next to the store in `link.json` (mode 0600).
 
 ### Troubleshooting
 

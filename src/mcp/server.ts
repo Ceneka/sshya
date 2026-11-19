@@ -5,6 +5,7 @@ import {
   getConnectionByAlias,
   getConnections,
   initDB,
+  LinkedConnectionError,
   recordConnectionUsage,
   recordConnectionsUsage,
   removeConnection,
@@ -18,6 +19,7 @@ import { executeCopy } from '../connection/copy';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
 import { loadConnectionSchema } from '../schema';
+import { autoSync } from '../link/sync';
 import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
@@ -37,6 +39,11 @@ const ok = (data: unknown, isError = false): ToolResult => ({
 
 const failResult = (message: string, errorKind: string): ToolResult =>
   ok({ ok: false, errorKind, error: message }, true);
+
+const storeFailure = (err: unknown): ToolResult =>
+  err instanceof LinkedConnectionError
+    ? ok({ ok: false, errorKind: err.errorKind, error: err.message, hint: 'Edit it in the lazybackup web UI; only keyPath, remotePath, and readonly are local.' }, true)
+    : failResult(err instanceof Error ? err.message : String(err), 'store_error');
 
 const aliasDenial = (policy: McpPolicy, alias: string): ToolResult =>
   failResult(
@@ -158,6 +165,7 @@ const serializeConnectionSummary = (connection: Connection): Record<string, unkn
   ...(connection.key_path ? { keyPath: connection.key_path } : {}),
   ...(connection.remote_path ? { remotePath: connection.remote_path } : {}),
   ...(connection.readonly === true ? { readonly: true } : {}),
+  ...(connection.link ? { linked: true } : {}),
 });
 
 const serializeConnection = (connection: Connection) => {
@@ -186,7 +194,10 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    async () => ok(listAllowedConnections(policy).map(serializeConnectionSummary)),
+    async () => {
+      await autoSync();
+      return ok(listAllowedConnections(policy).map(serializeConnectionSummary));
+    },
   );
 
   server.registerTool(
@@ -256,7 +267,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           }, overwrite === true);
           return ok({ ok: true, created: !existed, connection: serializeConnection(connection) });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
+          return storeFailure(err);
         }
       },
     );
@@ -319,7 +330,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           const connection = getConnectionByAlias(parsed.data.alias);
           return ok({ ok: true, connection: connection ? serializeConnection(connection) : undefined });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
+          return storeFailure(err);
         }
       },
     );
@@ -339,7 +350,11 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
         if (!existing) {
           return await aliasNotFound(policy, alias);
         }
-        removeConnection(alias);
+        try {
+          removeConnection(alias);
+        } catch (err) {
+          return storeFailure(err);
+        }
         return ok({ ok: true, removed: existing });
       },
     );
@@ -840,7 +855,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
             invalid.push({
               connection: candidate,
               error: err instanceof Error ? err.message : String(err),
-              errorKind: 'store_error',
+              errorKind: err instanceof LinkedConnectionError ? err.errorKind : 'store_error',
             });
           }
         }
@@ -924,7 +939,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which part survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, `connection_readonly`, and `linked_connection`.',
           '- An unknown alias returns `errorKind: "alias_not_found"` with up to three `suggestions`; fix the alias and retry, never execute against a suggestion automatically.',
           '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` when sudo needs a terminal. Prefer passwordless `sudo -n` for agents.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
@@ -941,6 +956,7 @@ const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void
           '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',
           '- Read-only mode guards the sshya store against MCP mutations and the remote host against uploads. It does not sandbox anything: run_command and run_on_many can still change anything the SSH user can, and copy_file downloads still write local files at the chosen path.',
           '- Connection details are stored locally in `~/.sshya/sshm.json`; set `SSHYA_DB` to isolate an agent workspace.',
+          '- Connections marked `linked: true` come from a lazybackup instance (`sshya link`), which is their source of truth. Alias/user/host/port changes and removal are refused with `errorKind: "linked_connection"`; only keyPath, remotePath, and readonly are local. The list refreshes from lazybackup automatically.',
         ].join('\n'),
       }],
     }),
@@ -982,6 +998,11 @@ export async function runMcpServer(options: McpServerOptions = {}): Promise<void
   const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Keep linked (lazybackup) connections fresh in a long-running process.
+  // autoSync is TTL-gated and never throws; the timer must not keep us alive.
+  void autoSync();
+  setInterval(() => void autoSync(), 60_000).unref();
 
   if (process.env.SSHYA_MCP_DEBUG === '1') {
     console.error(`sshya MCP server ${pkg.version} listening on stdio`);

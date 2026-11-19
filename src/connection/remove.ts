@@ -1,5 +1,5 @@
 import chalk from '../lib/color';
-import { getConnectionByAlias, removeConnection } from '../database';
+import { getConnectionByAlias, LinkedConnectionError, removeConnection } from '../database';
 import { selectAlias } from '../helpers/selectAlias';
 import { jsonEnabled, printJson } from '../output';
 
@@ -35,7 +35,20 @@ export async function removeConnectionPrompt(alias?: string, options: RemoveOpti
     return;
   }
 
-  removeConnection(alias);
+  try {
+    removeConnection(alias);
+  } catch (err) {
+    if (!(err instanceof LinkedConnectionError)) {
+      throw err;
+    }
+    if (json) {
+      printJson({ ok: false, errorKind: err.errorKind, error: err.message });
+    } else {
+      console.error(chalk.red(err.message));
+    }
+    process.exitCode = 1;
+    return;
+  }
 
   if (json) {
     printJson({ ok: true, removed: existing });
