@@ -1,9 +1,9 @@
 import chalk from 'chalk';
 import fs from 'fs';
-import inquirer from 'inquirer';
-import { addConnection, connectionSchema, getConnectionByAlias, updateConnection } from '../database';
+import { addConnection, getConnectionByAlias, updateConnection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { jsonEnabled, printJson } from '../output';
+import { loadConnectionSchema, type ConnectionInput } from '../schema';
 
 export type ImportStrategy = 'ask' | 'skip' | 'overwrite' | 'error';
 
@@ -90,7 +90,8 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
         ? 'error'
         : requestedStrategy;
 
-    const valid: Array<ReturnType<typeof connectionSchema.parse>> = [];
+    const connectionSchema = await loadConnectionSchema();
+    const valid: ConnectionInput[] = [];
     const summary: ImportSummary = {
         ok: true,
         total: connectionsToImport.length,
@@ -143,6 +144,7 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
                 let action: 'Skip' | 'Overwrite' = 'Skip';
 
                 if (strategy === 'ask') {
+                    const { default: inquirer } = await import('inquirer');
                     const answer = await inquirer.prompt([
                         {
                             type: 'select',

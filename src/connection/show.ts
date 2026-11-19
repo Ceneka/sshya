@@ -24,7 +24,7 @@ export async function showConnectionPrompt(alias?: string, options: ShowOptions 
     alias = await selectAlias('Select a connection to show');
   }
 
-  const lookup = resolveAliasForCommand(alias, { json });
+  const lookup = await resolveAliasForCommand(alias, { json });
 
   if (!lookup.ok) {
     if (json) {

@@ -1,9 +1,9 @@
 import chalk from 'chalk';
-import inquirer from 'inquirer';
-import { connectionSchema, getConnectionByAlias, updateConnection, type Connection } from '../database';
+import { getConnectionByAlias, updateConnection, type Connection } from '../database';
 import { enableEscapeExit } from '../helpers/escExit';
 import { selectAlias } from '../helpers/selectAlias';
 import { jsonEnabled, printJson } from '../output';
+import { loadConnectionSchema } from '../schema';
 import { testConnection } from './test';
 
 export interface UpdateOptions {
@@ -26,10 +26,10 @@ const hasUpdates = (options: UpdateOptions): boolean =>
   options.remotePath !== undefined ||
   options.newAlias !== undefined;
 
-const applyUpdates = (
+const applyUpdates = async (
   connection: Connection,
   options: UpdateOptions,
-): { alias: string; user: string; host: string; port?: string; key_path?: string; remote_path?: string } => {
+): Promise<{ alias: string; user: string; host: string; port?: string; key_path?: string; remote_path?: string }> => {
   const merged = {
     alias: options.newAlias ?? connection.alias,
     user: options.user ?? connection.user,
@@ -39,6 +39,7 @@ const applyUpdates = (
     remote_path: options.remotePath !== undefined ? options.remotePath : connection.remote_path,
   };
 
+  const connectionSchema = await loadConnectionSchema();
   const parsed = connectionSchema.safeParse(merged);
   if (!parsed.success) {
     throw new Error(parsed.error.issues.map(issue => issue.message).join(', '));
@@ -111,6 +112,7 @@ export async function updateConnectionPrompt(alias?: string, options: UpdateOpti
 
     const cleanup = enableEscapeExit();
     try {
+      const { default: inquirer } = await import('inquirer');
       const answers = await inquirer.prompt([
         {
           type: 'input',
@@ -160,7 +162,7 @@ export async function updateConnectionPrompt(alias?: string, options: UpdateOpti
         },
       ]);
 
-      const updated = saveUpdate(existing.alias, {
+      const updated = await saveUpdate(existing.alias, {
         user: answers.user as string | undefined,
         host: answers.host as string | undefined,
         port: answers.port as string | undefined,
@@ -194,7 +196,7 @@ export async function updateConnectionPrompt(alias?: string, options: UpdateOpti
     return;
   }
 
-  const updated = saveUpdate(existing.alias, options, json);
+  const updated = await saveUpdate(existing.alias, options, json);
   if (!updated) {
     return;
   }
@@ -207,18 +209,18 @@ export async function updateConnectionPrompt(alias?: string, options: UpdateOpti
   }
 }
 
-const saveUpdate = (
+const saveUpdate = async (
   alias: string,
   options: UpdateOptions,
   json: boolean,
-): Connection | undefined => {
+): Promise<Connection | undefined> => {
   try {
     const existing = getConnectionByAlias(alias);
     if (!existing) {
       throw new Error(`Alias not found: ${alias}`);
     }
 
-    const next = applyUpdates(existing, options);
+    const next = await applyUpdates(existing, options);
     updateConnection(
       alias,
       next.user,

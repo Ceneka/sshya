@@ -1,7 +1,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { z } from 'zod';
 
 const DEFAULT_DB_FILE = path.join(os.homedir(), '.sshya', 'sshm.json');
 
@@ -34,16 +33,6 @@ export interface Connection {
    */
   readonly?: boolean;
 }
-
-export const connectionSchema = z.object({
-  alias: z.string().min(1),
-  user: z.string().min(1),
-  host: z.string().min(1),
-  key_path: z.string().optional(),
-  port: z.union([z.string(), z.number()]).optional(),
-  remote_path: z.string().optional(),
-  readonly: z.boolean().optional(),
-});
 
 const normalizeOptionalString = (value?: string | number | null): string | undefined => {
   if (value === undefined || value === null) {

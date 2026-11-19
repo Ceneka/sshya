@@ -311,7 +311,7 @@ export async function copyConnectionPrompt(
         alias = await selectAlias(download ? 'Select a connection to copy from' : 'Select a connection to copy to');
     }
 
-    const lookup = resolveAliasForCommand(alias, { json });
+    const lookup = await resolveAliasForCommand(alias, { json });
     if (!lookup.ok) {
         if (json) {
             printJson({

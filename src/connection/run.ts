@@ -337,7 +337,7 @@ export async function runConnectionPrompt(
     alias = await selectAlias('Select a connection to run a command on');
   }
 
-  const lookup = resolveAliasForCommand(alias, { json });
+  const lookup = await resolveAliasForCommand(alias, { json });
 
   if (!lookup.ok) {
     if (json) {

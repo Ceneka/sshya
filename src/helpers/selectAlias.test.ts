@@ -45,8 +45,8 @@ afterEach(() => {
 });
 
 describe('resolveAliasForCommand', () => {
-  test('exact matches always win, even in JSON mode', () => {
-    const result = resolveAliasForCommand('prod-api', { json: true });
+  test('exact matches always win, even in JSON mode', async () => {
+    const result = await resolveAliasForCommand('prod-api', { json: true });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -57,8 +57,8 @@ describe('resolveAliasForCommand', () => {
     expect(result.fuzzy).toBe(false);
   });
 
-  test('refuses fuzzy matching with JSON and returns at most three suggestions', () => {
-    const result = resolveAliasForCommand('prod', { json: true });
+  test('refuses fuzzy matching with JSON and returns at most three suggestions', async () => {
+    const result = await resolveAliasForCommand('prod', { json: true });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -69,8 +69,8 @@ describe('resolveAliasForCommand', () => {
     expect(result.suggestions).not.toContain('staging-api');
   });
 
-  test('refuses fuzzy matching when the terminal is not interactive', () => {
-    const result = resolveAliasForCommand('prodap', { interactive: false });
+  test('refuses fuzzy matching when the terminal is not interactive', async () => {
+    const result = await resolveAliasForCommand('prodap', { interactive: false });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -79,15 +79,15 @@ describe('resolveAliasForCommand', () => {
     expect(result.suggestions[0]).toBe('prod-api');
   });
 
-  test('SSHYA_JSON disables fuzzy matching even when forced interactive', () => {
+  test('SSHYA_JSON disables fuzzy matching even when forced interactive', async () => {
     process.env.SSHYA_JSON = '1';
 
-    const result = resolveAliasForCommand('prodap', { interactive: true });
+    const result = await resolveAliasForCommand('prodap', { interactive: true });
 
     expect(result.ok).toBe(false);
   });
 
-  test('allows fuzzy matching for an interactive human and reports the substitution', () => {
+  test('allows fuzzy matching for an interactive human and reports the substitution', async () => {
     const errors: string[] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => {
@@ -95,7 +95,7 @@ describe('resolveAliasForCommand', () => {
     };
 
     try {
-      const result = resolveAliasForCommand('prodap', { interactive: true });
+      const result = await resolveAliasForCommand('prodap', { interactive: true });
 
       expect(result.ok).toBe(true);
       if (!result.ok) {
@@ -110,10 +110,10 @@ describe('resolveAliasForCommand', () => {
     expect(errors.join('\n')).toContain('Using alias "prod-api" for "prodap"');
   });
 
-  test('findAliasSuggestions caps the candidate list', () => {
+  test('findAliasSuggestions caps the candidate list', async () => {
     writeStore(['prod-api', 'prod-app', 'prod-db', 'prod-web', 'prod-worker']);
 
-    const suggestions = findAliasSuggestions('prod', 3);
+    const suggestions = await findAliasSuggestions('prod', 3);
 
     expect(suggestions).toHaveLength(3);
   });

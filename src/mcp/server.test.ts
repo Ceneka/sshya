@@ -46,7 +46,7 @@ const writeScript = (name: string, body: string): string => {
 };
 
 const openServer = async (options: McpServerOptions = {}) => {
-  const server = createMcpServer(options);
+  const server = await createMcpServer(options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'sshya-test', version: '0.0.0' });
 

@@ -19,8 +19,7 @@
  */
 import { randomUUID } from 'crypto';
 import path from 'path';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
 import { quoteRemotePath, quoteShellArg } from '../helpers/shell';
@@ -375,7 +374,9 @@ const parseTaggedOutput = (
   return { tag, value: value?.trim() };
 };
 
-export const registerFileTools = (server: McpServer, policy: McpPolicy): void => {
+export const registerFileTools = async (server: McpServer, policy: McpPolicy): Promise<void> => {
+  // Interactive/MCP-only dependency: keep zod out of the CLI startup path.
+  const { z } = await import('zod');
   server.registerTool(
     'read_remote_file',
     {

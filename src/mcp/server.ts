@@ -1,10 +1,7 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import path from 'path';
-import { z } from 'zod';
 import pkg from '../../package.json' with { type: 'json' };
 import {
-  connectionSchema,
   getConnectionByAlias,
   getConnections,
   initDB,
@@ -19,6 +16,7 @@ import { findAliasSuggestions } from '../helpers/selectAlias';
 import { executeCopy } from '../connection/copy';
 import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
+import { loadConnectionSchema } from '../schema';
 import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
@@ -62,13 +60,13 @@ const MCP_DEFAULT_STDOUT_BYTES = 8 * 1024;
 const MCP_DEFAULT_STDERR_BYTES = 4 * 1024;
 
 /** Fuzzy candidates are hints only: never execute against a suggestion. */
-const aliasSuggestions = (policy: McpPolicy, alias: string): string[] =>
-  findAliasSuggestions(alias, 25)
+const aliasSuggestions = async (policy: McpPolicy, alias: string): Promise<string[]> =>
+  (await findAliasSuggestions(alias, 25))
     .filter(candidate => policy.isAliasAllowed(candidate))
     .slice(0, 3);
 
-const aliasNotFound = (policy: McpPolicy, alias: string): ToolResult => {
-  const suggestions = aliasSuggestions(policy, alias);
+const aliasNotFound = async (policy: McpPolicy, alias: string): Promise<ToolResult> => {
+  const suggestions = await aliasSuggestions(policy, alias);
   return ok({
     ok: false,
     errorKind: 'alias_not_found',
@@ -176,7 +174,10 @@ const listAllowedConnections = (policy: McpPolicy): Connection[] =>
     .filter(connection => policy.isAliasAllowed(connection.alias))
     .sort(sortByLastUsed);
 
-const registerTools = (server: McpServer, policy: McpPolicy): void => {
+const registerTools = async (server: McpServer, policy: McpPolicy): Promise<void> => {
+  // Zod is evaluated only for the MCP server (and lazily on first use here),
+  // never for the ordinary CLI commands.
+  const { z } = await import('zod');
   server.registerTool(
     'list_connections',
     {
@@ -200,7 +201,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       return ok(serializeConnection(connection));
     },
@@ -227,6 +228,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           return aliasDenial(policy, alias);
         }
 
+        const connectionSchema = await loadConnectionSchema();
         const parsed = connectionSchema.safeParse({
           alias,
           user,
@@ -283,7 +285,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
 
         const merged = {
@@ -296,6 +298,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           readonly: readonly !== undefined ? readonly : existing.readonly,
         };
 
+        const connectionSchema = await loadConnectionSchema();
         const parsed = connectionSchema.safeParse(merged);
         if (!parsed.success) {
           return failResult(parsed.error.issues.map(issue => issue.message).join(', '), 'invalid_arguments');
@@ -333,7 +336,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         }
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
         removeConnection(alias);
         return ok({ ok: true, removed: existing });
@@ -359,7 +362,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       const result = await testConnection(connection, {
         timeoutMs: timeoutMs ?? 5000,
@@ -396,7 +399,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
 
       recordConnectionUsage(alias);
@@ -491,7 +494,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           const connection = getConnectionByAlias(alias);
 
           if (!connection) {
-            const suggestions = aliasSuggestions(policy, alias);
+            const suggestions = await aliasSuggestions(policy, alias);
             results[index] = {
               ok: false,
               alias,
@@ -603,7 +606,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const connection = getConnectionByAlias(alias);
         if (!connection) {
-          return aliasNotFound(policy, alias);
+          return await aliasNotFound(policy, alias);
         }
         if (connection.readonly === true) {
           return readonlyConnectionDenial(alias, 'write_remote_file calls');
@@ -711,7 +714,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       if (connection.readonly === true && direction === 'upload') {
         return readonlyConnectionDenial(alias, 'copy_file uploads');
@@ -747,7 +750,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return aliasNotFound(policy, alias);
+        return await aliasNotFound(policy, alias);
       }
       const args = interactive ? buildInteractiveSshArgs(connection) : buildSshArgs(connection);
       return ok({
@@ -783,6 +786,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         const refused: Array<{ alias: string; error: string; errorKind: 'alias_not_allowed' }> = [];
         const invalid: Array<{ connection: unknown; error: string; errorKind?: string }> = [];
 
+        const connectionSchema = await loadConnectionSchema();
         for (const candidate of connections) {
           const parsed = connectionSchema.safeParse({
             alias: candidate.alias,
@@ -851,7 +855,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     );
   }
 
-  registerFileTools(server, policy);
+  await registerFileTools(server, policy);
 
   server.registerResource(
     'connections',
@@ -940,7 +944,10 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
 export type McpServerOptions = McpPolicyOptions;
 
-export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
+export const createMcpServer = async (options: McpServerOptions = {}): Promise<McpServer> => {
+  // Load the MCP SDK lazily so commands other than `sshya mcp` never evaluate
+  // its (large) module graph.
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
   const policy = resolveMcpPolicy(options);
   const server = new McpServer(
     {
@@ -960,13 +967,14 @@ export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
     },
   );
 
-  registerTools(server, policy);
+  await registerTools(server, policy);
   return server;
 };
 
 export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {
   initDB();
-  const server = createMcpServer(options);
+  const server = await createMcpServer(options);
+  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
   const transport = new StdioServerTransport();
   await server.connect(transport);
 

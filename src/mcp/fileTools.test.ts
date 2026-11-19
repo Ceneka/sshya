@@ -82,7 +82,7 @@ const seed = (alias: string, remotePath?: string, readonly?: boolean): void => {
 };
 
 const openServer = async (options: McpServerOptions = {}) => {
-  const server = createMcpServer(options);
+  const server = await createMcpServer(options);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'sshya-files-test', version: '0.0.0' });
 
