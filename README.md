@@ -94,6 +94,8 @@ Notes for scripting:
 | `SSHYA_MAX_OUTPUT` | `65536` | Default per-stream capture cap (supports `64k`) |
 | `SSHYA_HOST_KEY_CHECKING` | ssh default | `strict`, `accept-new`, or `ask` |
 | `SSHYA_SSH_BIN` / `SSHYA_SCP_BIN` | `ssh` / `scp` | Alternate binaries |
+| `SSHYA_MCP_ALLOW` | unset | Alias allowlist for `sshya mcp` (comma-separated, supports `*`/`?` globs) |
+| `SSHYA_MCP_READ_ONLY` | unset | `1` removes MCP tools that mutate the store or write files |
 
 ### MCP server
 
@@ -114,8 +116,9 @@ to MCP-capable agents:
 Tools: `list_connections`, `get_connection`, `add_connection`,
 `update_connection`, `remove_connection`, `test_connection`, `run_command`,
 `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, and
-`import_connections`. Resources: `sshya://connections` (the store) and
-`sshya://guide` (agent conventions and recipes).
+`import_connections` (mutating tools are absent in read-only mode). Resources:
+`sshya://connections` (the store) and `sshya://guide` (agent conventions,
+recipes, and the active policy).
 
 `run_command` returns a superset of the old result (`ok`, `stdout`, `stderr`,
 `exitCode`, `timedOut`, `durationMs`, `reused`, byte counts, truncation flags,
@@ -123,6 +126,44 @@ Tools: `list_connections`, `get_connection`, `add_connection`,
 bounded concurrency. `write_remote_file` pipes bytes over SSH, so it works
 without a local scp target and supports `encoding: base64`, `append`, and
 `mode`. Neither tool allocates a TTY unless asked.
+
+### Restricting the MCP server
+
+Scope the server down before handing it to an LLM:
+
+```json
+{
+  "mcpServers": {
+    "sshya": {
+      "command": "sshya",
+      "args": ["mcp", "--aliases", "web,stg-*", "--read-only"]
+    }
+  }
+}
+```
+
+The equivalent environment variables:
+
+```sh
+SSHYA_MCP_ALLOW='web,stg-*' SSHYA_MCP_READ_ONLY=1 sshya mcp
+```
+
+- `--aliases` / `SSHYA_MCP_ALLOW` limits which aliases are exposed. Values are
+  comma-separated and support simple `*` and `?` globs. Tools that target another
+  alias fail with `errorKind: "alias_not_allowed"`; `list_connections` and
+  `sshya://connections` only return allowed aliases, and `add_connection` /
+  `import_connections` can only create allowed aliases.
+- `--read-only` / `SSHYA_MCP_READ_ONLY=1` does not register `add_connection`,
+  `update_connection`, `remove_connection`, `import_connections`, or
+  `write_remote_file`, and restricts `copy_file` to `direction: "download"`.
+- A connection can be marked `readonly: true` to refuse `write_remote_file` and
+  `copy_file` uploads for that alias (`errorKind: "connection_readonly"`).
+  `add_connection`, `update_connection`, and `import_connections` accept the
+  flag, and `update_connection` with `readonly: false` clears it.
+
+Read-only mode protects the sshya store and file writes made through sshya. It
+does **not** sandbox the remote host: `run_command` and `run_on_many` remain
+available and execute arbitrary commands with the SSH user's permissions.
 
 
 ## Technology Stack

@@ -15,7 +15,7 @@
 ## Key Components
 
 ### Database (`src/database.ts`)
-- `Connection` interface with id, alias, user, host, key_path, port, remote_path, lastUsed
+- `Connection` interface with id, alias, user, host, key_path, port, remote_path, lastUsed, and optional `readonly`
 - `upsertConnection()` for idempotent add-or-replace
 - `getDbPath()` honors `SSHYA_DB` so tests and agents can use an isolated store
 - Cache is keyed on file mtime/size so a long-running MCP server sees external edits
@@ -45,18 +45,22 @@
 - `doctor [--probe]`: Checks ssh/scp, keys, agent, DB, pool, and optionally every alias
 - `fzf`: In-process fzf picker that connects to the selected alias
 - `s`: Shortcut entrypoint that always runs `connect` (interactive picker or alias)
-- `mcp`: Starts the stdio MCP server
+- `mcp`: Starts the stdio MCP server (`--aliases a,b`, `--read-only`)
 
 ### Output (`src/output.ts`)
 - `jsonEnabled()` returns true for `--json` or `SSHYA_JSON=1`
 - Human messages use chalk; JSON mode never mixes styling into the payload
 - Errors go to stderr; machine-readable error objects are emitted in JSON mode
 
-### MCP (`src/mcp/server.ts`)
-- `createMcpServer()` is reusable for tests
+### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`)
+- `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
-- Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions)
+- Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions plus the active policy)
 - MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped, `cwd=true`
+- Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import
+- Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only protects the sshya store and sshya file writes, not the remote host
+- Connections with `readonly: true` refuse `write_remote_file` and `copy_file` uploads (`errorKind: 'connection_readonly'`); `run_command` is not restricted by the flag
+- The active policy is exposed in server instructions and `sshya://guide`
 - Never call `process.exit` from a tool; return `{ ok, error }` with `isError` instead
 - Never `console.log` in the MCP process (stdout is the protocol channel)
 

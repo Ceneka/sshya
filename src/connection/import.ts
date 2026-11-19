@@ -168,6 +168,8 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
                     parsedConn.key_path ?? '',
                     parsedConn.port ? String(parsedConn.port) : undefined,
                     parsedConn.remote_path,
+                    undefined,
+                    parsedConn.readonly,
                 );
                 summary.updated++;
                 continue;
@@ -180,6 +182,7 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
                 parsedConn.key_path,
                 parsedConn.port ? String(parsedConn.port) : undefined,
                 parsedConn.remote_path,
+                parsedConn.readonly,
             );
             summary.imported++;
         }

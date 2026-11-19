@@ -27,6 +27,12 @@ export interface Connection {
   port?: string;
   remote_path?: string;
   lastUsed?: number;
+  /**
+   * When true, agent-facing write helpers (MCP `write_remote_file` and
+   * `copy_file` uploads) refuse to modify this host. It is not an SSH-level
+   * restriction: `run_command` remains arbitrary.
+   */
+  readonly?: boolean;
 }
 
 export const connectionSchema = z.object({
@@ -36,6 +42,7 @@ export const connectionSchema = z.object({
   key_path: z.string().optional(),
   port: z.union([z.string(), z.number()]).optional(),
   remote_path: z.string().optional(),
+  readonly: z.boolean().optional(),
 });
 
 const normalizeOptionalString = (value?: string | number | null): string | undefined => {
@@ -81,6 +88,7 @@ const normalizeConnection = (connection: Connection): Connection => {
     key_path: normalizedKeyPath,
     port: normalizedPort,
     remote_path: normalizedRemotePath,
+    readonly: connection.readonly === true ? true : undefined,
   };
 };
 
@@ -166,6 +174,7 @@ export const addConnection = (
   key_path?: string,
   port?: string,
   remote_path?: string,
+  isReadonly?: boolean,
 ) => {
   const connections = readDB();
   const normalizedAlias = alias.trim();
@@ -187,6 +196,7 @@ export const addConnection = (
     key_path: normalizedKeyPath,
     port: normalizedPort,
     remote_path: normalizedRemotePath,
+    readonly: isReadonly === true ? true : undefined,
   };
   connections.push(newConnection);
   writeDB(connections);
@@ -220,6 +230,7 @@ export const updateConnection = (
   newPort?: string,
   newRemotePath?: string,
   newAlias?: string,
+  newReadonly?: boolean,
 ) => {
   const connections = readDB();
   const connection = connections.find(c => c.alias === alias);
@@ -241,6 +252,9 @@ export const updateConnection = (
   connection.key_path = expandHomePath(normalizeOptionalString(newKeyPath));
   connection.port = normalizeOptionalString(newPort);
   connection.remote_path = normalizeOptionalString(newRemotePath);
+  if (newReadonly !== undefined) {
+    connection.readonly = newReadonly === true ? true : undefined;
+  }
   writeDB(connections);
   return true;
 };
@@ -257,6 +271,7 @@ export const upsertConnection = (
     key_path?: string;
     port?: string;
     remote_path?: string;
+    readonly?: boolean;
   },
   overwrite: boolean = false,
 ) => {
@@ -265,10 +280,10 @@ export const upsertConnection = (
     if (!overwrite) {
       throw new Error(`Connection with alias "${data.alias}" already exists. Use overwrite/--force to replace it.`);
     }
-    updateConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path);
+    updateConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path, undefined, data.readonly);
     return getConnectionByAlias(data.alias)!;
   }
-  return addConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path);
+  return addConnection(data.alias, data.user, data.host, data.key_path, data.port, data.remote_path, data.readonly);
 };
 
 export const recordConnectionUsage = (alias: string) => {

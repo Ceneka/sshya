@@ -307,9 +307,14 @@ program
 program
   .command('mcp')
   .description('Start the sshya MCP server on stdio for agent integrations')
-  .action(async () => {
+  .option('--aliases <patterns>', 'Only expose these aliases (comma-separated, supports simple globs like stg-*)')
+  .option('--read-only', 'Expose read-only tools only: no store mutations, remote file writes, or uploads')
+  .action(async (options: { aliases?: string; readOnly?: boolean }) => {
     const { runMcpServer } = await import('./src/mcp/server');
-    await runMcpServer();
+    await runMcpServer({
+      aliases: options.aliases?.trim() ? options.aliases : undefined,
+      readOnly: options.readOnly === true ? true : undefined,
+    });
   });
 
 program
