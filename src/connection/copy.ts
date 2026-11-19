@@ -4,7 +4,7 @@ import { spawn } from 'child_process';
 import { expandHomePath, getConnectionByAlias, recordConnectionUsage, type Connection } from '../database';
 import { ByteCapture, defaultMaxOutputBytes } from '../helpers/capture';
 import { classifySshError, spawnFailure, type SshErrorKind } from '../helpers/errors';
-import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildSshOptionArgs, type HostKeyChecking } from '../helpers/ssh';
 import { jsonEnabled, printJson } from '../output';
 
@@ -253,25 +253,25 @@ export async function copyConnectionPrompt(
         alias = await selectAlias(download ? 'Select a connection to copy from' : 'Select a connection to copy to');
     }
 
-    let connection = getConnectionByAlias(alias);
-    if (!connection) {
-        const matchedAlias = findAliasBySearchTerm(alias);
-        if (matchedAlias) {
-            alias = matchedAlias;
-            connection = getConnectionByAlias(alias);
-        }
-    }
-
-    if (!connection) {
+    const lookup = resolveAliasForCommand(alias, { json });
+    if (!lookup.ok) {
         if (json) {
-            printJson({ ok: false, error: `Alias not found: ${alias}` });
+            printJson({
+                ok: false,
+                error: `Alias not found: ${alias}`,
+                suggestions: lookup.suggestions,
+            });
         } else {
-            console.error(chalk.red('Alias not found'));
+            console.error(chalk.red(`Alias not found: ${alias}`));
+            if (lookup.suggestions.length > 0) {
+                console.error(chalk.grey(`Did you mean: ${lookup.suggestions.join(', ')}?`));
+            }
         }
         process.exit(1);
     }
 
-    recordConnectionUsage(alias);
+    const connection = lookup.connection;
+    recordConnectionUsage(connection.alias);
 
     const result = await executeCopy(
         connection,

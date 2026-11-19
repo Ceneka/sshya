@@ -38,6 +38,9 @@
 ### Commands (`index.ts` / `s.ts`)
 - `add`/`remove`/`update`/`list`/`show`: Manage connections
 - `run [alias] -- <command...>`: Non-interactive remote command, streams or captures output; `--max-output`, `--tail`, `--no-reuse`, `--accept-new-host-key`
+  - Non-interactive runs (`--json` or non-TTY stdout) default to a 120 s timeout; `--timeout 0` disables it
+  - In capture/JSON mode a non-TTY stdin is streamed to the remote command; `--no-stdin` or `</dev/null` forces it off
+- Alias resolution is centralized in `resolveAliasForCommand()` (`src/helpers/selectAlias.ts`): exact matches always win, fuzzy matching only for interactive TTYs outside JSON mode, and failures return up to three suggestions
 - `print [alias]`: Output an interactive SSH command string for scripting/fzf
 - `import`/`export`: JSON file or stdin/stdout operations; import has `--strategy ask|skip|overwrite|error`
 - `test [alias]`: Exits non-zero on failure and reports stderr/hint

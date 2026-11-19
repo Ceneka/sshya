@@ -1,9 +1,9 @@
 import chalk from 'chalk';
-import { getConnectionByAlias, type Connection } from '../database';
+import type { Connection } from '../database';
 import type { SshErrorKind } from '../helpers/errors';
-import { findAliasBySearchTerm, selectAlias } from '../helpers/selectAlias';
+import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import type { HostKeyChecking } from '../helpers/ssh';
-import { printJson } from '../output';
+import { jsonEnabled, printJson } from '../output';
 import { executeSshCommand } from './run';
 
 export interface TestOptions {
@@ -55,15 +55,8 @@ export const testConnection = async (
   };
 };
 
-const resolveAlias = (term: string): string | undefined => {
-  if (getConnectionByAlias(term)) {
-    return term;
-  }
-  return findAliasBySearchTerm(term);
-};
-
 export async function testConnectionPrompt(alias?: string, options: TestOptions = {}): Promise<void> {
-  const json = options.json === true;
+  const json = jsonEnabled(options.json);
 
   if (!alias) {
     if (!process.stdin.isTTY) {
@@ -77,18 +70,27 @@ export async function testConnectionPrompt(alias?: string, options: TestOptions 
     alias = await selectAlias('Select a connection to test');
   }
 
-  const resolvedAlias = resolveAlias(alias);
-  const connection = resolvedAlias ? getConnectionByAlias(resolvedAlias) : undefined;
+  const lookup = resolveAliasForCommand(alias, { json });
 
-  if (!connection) {
+  if (!lookup.ok) {
     if (json) {
-      printJson({ alias, ok: false, error: 'Alias not found' });
+      printJson({
+        alias,
+        ok: false,
+        error: `Alias not found: ${alias}`,
+        suggestions: lookup.suggestions,
+      });
     } else {
       console.error(chalk.red(`Alias not found: ${alias}`));
+      if (lookup.suggestions.length > 0) {
+        console.error(chalk.grey(`Did you mean: ${lookup.suggestions.join(', ')}?`));
+      }
     }
     process.exitCode = 1;
     return;
   }
+
+  const connection = lookup.connection;
 
   if (!json) {
     console.log(`\nTesting connection to ${chalk.blue(connection.alias)}...`);

@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 import { Command, InvalidArgumentError } from 'commander';
 import pkg from './package.json' with { type: "json" };
-import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, doctorCommand, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, poolCommand, removeConnectionPrompt, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
+import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, doctorCommand, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, poolCommand, removeConnectionPrompt, resolveRunTimeoutMs, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { parseByteSize } from './src/helpers/capture';
 import { printConnectionsPrompt } from './src/helpers/connection';
@@ -82,9 +82,10 @@ program
   .option('--tty', 'Allocate a remote TTY')
   .option('--allow-password', 'Allow SSH to prompt for a password (BatchMode off)')
   .option('--connect-timeout <seconds>', 'SSH ConnectTimeout in seconds', '10')
-  .option('--timeout <seconds>', 'Abort the remote command after this many seconds')
+  .option('--timeout <seconds>', 'Abort the remote command after this many seconds (0 disables the 120s default)')
   .option('--no-cwd', 'Do not cd into the connection remote path first')
   .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
+  .option('--no-stdin', 'Do not forward piped stdin to the remote command')
   .option('--max-output <size>', 'Cap captured output per stream (e.g. 64k, 1m)', parseByteSizeOption)
   .option('--tail', 'Keep the end instead of the start when output is truncated')
   .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
@@ -97,6 +98,7 @@ program
     timeout?: string;
     cwd?: boolean;
     reuse?: boolean;
+    stdin?: boolean;
     maxOutput?: number;
     tail?: boolean;
     acceptNewHostKey?: boolean;
@@ -107,9 +109,10 @@ program
       tty: !!options.tty,
       batchMode: !options.allowPassword,
       connectTimeout: Number(options.connectTimeout) || 10,
-      timeoutMs: secondsToMs(options.timeout),
+      timeoutMs: resolveRunTimeoutMs(options.timeout, { json: options.json }),
       cwd: options.cwd !== false,
       reuse: options.reuse !== false,
+      noStdin: options.stdin === false,
       maxOutputBytes: options.maxOutput,
       outputMode: options.tail ? 'tail' : 'head',
       hostKeyChecking: resolveHostKeyChecking(options),
