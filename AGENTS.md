@@ -34,7 +34,7 @@
 
 ### Output and errors (`src/helpers/capture.ts`, `src/helpers/errors.ts`)
 - `ByteCapture` caps each stream (default 64 KiB), counts bytes/lines, preserves UTF-8 boundaries, and emits a truncation marker
-- `classifySshError()` maps stderr to `errorKind` plus an actionable `hint`; timeouts win over other patterns
+- `classifySshError()` maps stderr to `errorKind` plus an actionable `hint`; timeouts win over other patterns, and sudo failures split into `tty` (`tty: true` / `sudo -n`) and `sudo_password` (NOPASSWD / `sudo -n`)
 
 ### Commands (`index.ts` / `s.ts`)
 - `add`/`remove`/`update`/`list`/`show`: Manage connections
@@ -59,8 +59,12 @@
 ### MCP (`src/mcp/server.ts`, `src/mcp/policy.ts`)
 - `createMcpServer(options?)` is reusable for tests; `runMcpServer()` starts stdio
 - Tools: `list_connections`, `get_connection`, `add_connection`, `update_connection`, `remove_connection`, `test_connection`, `run_command`, `run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, `import_connections`
-- Resources: `sshya://connections` (JSON store) and `sshya://guide` (agent conventions plus the active policy)
-- MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped, `cwd=true`
+- Resources: `sshya://connections` (lean JSON store) and `sshya://guide` (agent conventions, compact-response details, and the active policy)
+- Responses are compact and minified: `ok()` uses `JSON.stringify` and `compactRunResult()` omits echoed input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero counters, and false flags while always keeping `ok`, `exitCode`, and failure `errorKind`/`hint`. `run_command`/`run_on_many` accept `verbose: true` for the full shape.
+- `list_connections` and `sshya://connections` return only `alias`, `target` (`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`, sorted by `lastUsed` desc. `get_connection`/`print_ssh_command` keep the full detail and ssh argv.
+- `run_on_many` supports `only: 'all' | 'failures'`, `match` (regex; matching stdout lines only), and `stdin`/`tty`/`reuse` parity with `run_command`; the summary `{total, succeeded, failed}` always covers every requested host.
+- Errors are actionable: unknown aliases return `errorKind: 'alias_not_found'` plus up to three `suggestions`; sudo failures classify as `tty` (`tty: true` / `sudo -n`) or `sudo_password` (NOPASSWD / `sudo -n`). Every `failResult` carries an `errorKind`.
+- MCP defaults: `acceptNewHostKey=true` (TOFU), `reuse=true`, output capped, `cwd=true`. Keep tool descriptions to one short sentence and param descriptions to a few words; put details in `sshya://guide` so `tools/list` stays under ~1,800 tokens.
 - Guardrails: `--aliases`/`SSHYA_MCP_ALLOW` allowlist (simple `*`/`?` globs) makes alias-target tools refuse with `errorKind: 'alias_not_allowed'`, filters list/resource output, and constrains add/import. An allowlist that parses to zero patterns (for example `--aliases ,`) denies every alias instead of failing open.
 - Guardrails: `--read-only`/`SSHYA_MCP_READ_ONLY=1` skips `add_connection`, `update_connection`, `remove_connection`, `import_connections`, and `write_remote_file`, and restricts `copy_file` to downloads. `run_command`/`run_on_many` stay because they are arbitrary remote execution; read-only guards the sshya store against MCP mutations and the remote host against uploads, but `copy_file` downloads still write local files at the caller-chosen path
 - Guardrails: `copy`/`copy_file` refuse local operands that scp would interpret as remote (`host:path`) or that start with `-` (`errorKind: 'invalid-path'`), so a read-only download cannot become an upload to another host

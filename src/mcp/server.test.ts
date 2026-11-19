@@ -450,6 +450,409 @@ describe('MCP read-only mode', () => {
   });
 });
 
+describe('MCP compact responses', () => {
+  test('run_command omits echoed input, empty streams, zero counters, and false flags', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-compact.sh', "printf 'hello\\n'");
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      const result = await client.callTool({
+        name: 'run_command',
+        arguments: { alias: 'web', command: 'uptime', reuse: false },
+      });
+      const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
+      const text = content.find(entry => entry.type === 'text')?.text ?? '';
+      const data = JSON.parse(text) as Record<string, unknown>;
+
+      expect(text).not.toContain('\n  ');
+      expect(data).toEqual({
+        alias: 'web',
+        ok: true,
+        exitCode: 0,
+        stdout: 'hello\n',
+      });
+      for (const omitted of [
+        'command',
+        'remoteCommand',
+        'target',
+        'cwd',
+        'signal',
+        'durationMs',
+        'stdoutBytes',
+        'stderrBytes',
+        'stdoutLines',
+        'stderrLines',
+        'stdoutTruncated',
+        'stderrTruncated',
+        'timedOut',
+        'reused',
+      ]) {
+        expect(data).not.toHaveProperty(omitted);
+      }
+    });
+  });
+
+  test('verbose restores the full run result while staying minified', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-verbose.sh', "printf 'hello\\n'");
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      const result = await client.callTool({
+        name: 'run_command',
+        arguments: { alias: 'web', command: 'uptime', reuse: false, verbose: true },
+      });
+      const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
+      const text = content.find(entry => entry.type === 'text')?.text ?? '';
+      const data = JSON.parse(text) as Record<string, unknown>;
+
+      expect(text).not.toContain('\n  ');
+      expect(data.command).toBe('uptime');
+      expect(data.remoteCommand).toBe('uptime');
+      expect(data.target).toBe('tester@web.example.test:22');
+      expect(data.stdout).toBe('hello\n');
+      expect(data.stdoutBytes).toBe(6);
+      expect(data.stdoutLines).toBe(1);
+      expect(data.signal).toBeNull();
+      expect(data.reused).toBe(false);
+    });
+  });
+
+  test('byte and line counters appear only for truncated streams', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-truncate.sh', "printf '0123456789abcdef0123456789abcdef\\n'");
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<Record<string, unknown>>(client, 'run_command', {
+        alias: 'web',
+        command: 'cat big',
+        reuse: false,
+        maxOutputBytes: 8,
+      });
+
+      expect(result.data.stdoutTruncated).toBe(true);
+      expect(result.data.stdoutBytes).toBe(33);
+      expect(result.data.stdoutLines).toBe(1);
+      expect(result.data).not.toHaveProperty('stderrBytes');
+      expect(result.data).not.toHaveProperty('stderrLines');
+    });
+  });
+
+  test('write_remote_file success keeps only actionable fields', async () => {
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-write-ok.sh', 'cat > /dev/null');
+    seed([{ alias: 'web' }]);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<Record<string, unknown>>(client, 'write_remote_file', {
+        alias: 'web',
+        path: '/srv/app/config.yml',
+        content: 'port: 8080\n',
+      });
+
+      expect(result.data.ok).toBe(true);
+      expect(result.data.alias).toBe('web');
+      expect(result.data.path).toBe('/srv/app/config.yml');
+      expect(result.data.bytesWritten).toBe(11);
+      expect(result.data).not.toHaveProperty('encoding');
+      expect(result.data).not.toHaveProperty('appended');
+      expect(result.data).not.toHaveProperty('durationMs');
+    });
+  });
+});
+
+describe('MCP lean connection listings', () => {
+  test('list_connections and the resource return alias, target, and non-empty fields, newest first', async () => {
+    upsertConnection({ alias: 'old', user: 'tester', host: 'old.example.test', port: '22' });
+    upsertConnection({
+      alias: 'new',
+      user: 'tester',
+      host: 'new.example.test',
+      port: '2222',
+      key_path: '/home/tester/.ssh/id_ed25519',
+      remote_path: '/srv/app',
+      readonly: true,
+    });
+
+    // lastUsed is not exposed; inject distinct values behind the MCP boundary.
+    const dbPath = process.env.SSHYA_DB!;
+    const stored = JSON.parse(fs.readFileSync(dbPath, 'utf8')) as Array<Record<string, unknown>>;
+    for (const connection of stored) {
+      connection.lastUsed = connection.alias === 'new' ? 2000 : 1000;
+    }
+    fs.writeFileSync(dbPath, JSON.stringify(stored));
+
+    await withServer({}, async (client) => {
+      const list = await callJson<Array<Record<string, unknown>>>(client, 'list_connections');
+      expect(list.data).toEqual([
+        {
+          alias: 'new',
+          target: 'tester@new.example.test:2222',
+          keyPath: '/home/tester/.ssh/id_ed25519',
+          remotePath: '/srv/app',
+          readonly: true,
+        },
+        {
+          alias: 'old',
+          target: 'tester@old.example.test:22',
+        },
+      ]);
+
+      const resource = JSON.parse(await readTextResource(client, 'sshya://connections'));
+      expect(resource).toEqual(list.data);
+
+      const detail = await callJson<Record<string, unknown>>(client, 'get_connection', { alias: 'new' });
+      expect(detail.data.sshCommand).toContain('ssh ');
+      expect(detail.data.lastUsed).toBe(2000);
+    });
+  });
+});
+
+describe('MCP run_on_many filters', () => {
+  const manyScript = (): string => writeScript('ssh-many.sh', [
+    'target=""',
+    'for a in "$@"; do case "$a" in *@*) target="$a" ;; esac; done',
+    'host="${target#*@}"',
+    'host="${host%%:*}"',
+    'case "$host" in',
+    "  ok1*) printf '0 ERROR 1\\n' ;;",
+    "  ok2*) printf '0\\n' ;;",
+    "  bad*) printf 'boom ERROR 7\\n'; exit 1 ;;",
+    "  *) printf 'unknown\\n'; exit 2 ;;",
+    'esac',
+    '',
+  ].join('\n'));
+
+  test('only=failures returns failed hosts but keeps the full summary', async () => {
+    process.env.SSHYA_SSH_BIN = manyScript();
+    seed([{ alias: 'ok1' }, { alias: 'ok2' }, { alias: 'bad' }]);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<{
+        ok: boolean;
+        summary: { total: number; succeeded: number; failed: number };
+        results: Array<{ alias: string; ok: boolean; stdout?: string }>;
+      }>(client, 'run_on_many', {
+        aliases: ['ok1', 'ok2', 'bad'],
+        command: 'check',
+        concurrency: 1,
+        only: 'failures',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.data.summary).toEqual({ total: 3, succeeded: 2, failed: 1 });
+      expect(result.data.results.map(row => row.alias)).toEqual(['bad']);
+      expect(result.data.results[0]?.ok).toBe(false);
+      expect(result.data.results[0]?.stdout).toBe('boom ERROR 7\n');
+    });
+  });
+
+  test('match returns only hosts with matching stdout lines and only those lines', async () => {
+    process.env.SSHYA_SSH_BIN = manyScript();
+    seed([{ alias: 'ok1' }, { alias: 'ok2' }, { alias: 'bad' }]);
+
+    await withServer({}, async (client) => {
+      const result = await callJson<{
+        summary: { total: number; succeeded: number; failed: number };
+        results: Array<{ alias: string; stdout?: string; ok: boolean }>;
+      }>(client, 'run_on_many', {
+        aliases: ['ok1', 'ok2', 'bad'],
+        command: 'check',
+        concurrency: 1,
+        match: 'ERROR',
+      });
+
+      expect(result.data.summary).toEqual({ total: 3, succeeded: 2, failed: 1 });
+      expect(result.data.results.map(row => row.alias)).toEqual(['ok1', 'bad']);
+      expect(result.data.results[0]?.stdout).toBe('0 ERROR 1');
+      expect(result.data.results[1]?.stdout).toBe('boom ERROR 7');
+    });
+  });
+
+  test('match and only=failures compose; invalid regex is an actionable error', async () => {
+    process.env.SSHYA_SSH_BIN = manyScript();
+    seed([{ alias: 'ok1' }, { alias: 'bad' }]);
+
+    await withServer({}, async (client) => {
+      const failures = await callJson<{ results: Array<{ alias: string }> }>(client, 'run_on_many', {
+        aliases: ['ok1', 'bad'],
+        command: 'check',
+        concurrency: 1,
+        only: 'failures',
+        match: 'ERROR',
+      });
+      expect(failures.data.results.map(row => row.alias)).toEqual(['bad']);
+
+      const invalid = await callJson<ToolError>(client, 'run_on_many', {
+        aliases: ['ok1'],
+        command: 'check',
+        match: '(',
+      });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.data.errorKind).toBe('invalid_arguments');
+    });
+  });
+
+  test('stdin, tty, and reuse reach every host', async () => {
+    const argvLog = path.join(tempDir, `${storeCounter}-many-argv.log`);
+    process.env.SSHYA_TEST_ARGV_LOG = argvLog;
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-echo-stdin.sh', [
+      'printf \'%s\\n\' "$*" >> "$SSHYA_TEST_ARGV_LOG"',
+      'data=$(cat)',
+      'printf \'%s\' "$data"',
+      '',
+    ].join('\n'));
+    seed([{ alias: 'one' }, { alias: 'two' }]);
+
+    try {
+      await withServer({}, async (client) => {
+        const result = await callJson<{ results: Array<{ stdout?: string }> }>(client, 'run_on_many', {
+          aliases: ['one', 'two'],
+          command: 'cat',
+          concurrency: 2,
+          stdin: 'payload-from-test',
+          tty: true,
+          reuse: false,
+        });
+
+        expect(result.data.results.map(row => row.stdout)).toEqual(['payload-from-test', 'payload-from-test']);
+      });
+
+      const invocations = fs.readFileSync(argvLog, 'utf8').trim().split('\n');
+      expect(invocations).toHaveLength(2);
+      for (const line of invocations) {
+        expect(line).toContain('-t');
+        expect(line).not.toContain('ControlMaster=auto');
+      }
+    } finally {
+      delete process.env.SSHYA_TEST_ARGV_LOG;
+    }
+  });
+});
+
+describe('MCP actionable errors', () => {
+  test('an unknown alias returns alias_not_found with fuzzy suggestions and no SSH spawn', async () => {
+    const marker = path.join(tempDir, `${storeCounter}-alias-marker`);
+    process.env.SSHYA_SSH_BIN = writeScript('ssh-alias-marker.sh', `printf ran > '${marker}'`);
+    seed([{ alias: 'web01' }, { alias: 'web02' }, { alias: 'db' }]);
+
+    await withServer({}, async (client) => {
+      const missing = await callJson<ToolError & { suggestions?: string[] }>(client, 'run_command', {
+        alias: 'webb01',
+        command: 'uptime',
+      });
+
+      expect(missing.isError).toBe(true);
+      expect(missing.data.errorKind).toBe('alias_not_found');
+      expect(missing.data.error).toBe('Alias not found: webb01');
+      expect(missing.data.suggestions?.length).toBeGreaterThan(0);
+      expect(missing.data.suggestions?.length).toBeLessThanOrEqual(3);
+      expect(missing.data.suggestions).toContain('web01');
+      expect(missing.data.suggestions).not.toContain('db');
+      expect(fs.existsSync(marker)).toBe(false);
+
+      const lookup = await callJson<ToolError & { suggestions?: string[] }>(client, 'get_connection', {
+        alias: 'webb01',
+      });
+      expect(lookup.data.errorKind).toBe('alias_not_found');
+      expect(lookup.data.suggestions).toContain('web02');
+
+      const many = await callJson<{
+        results: Array<{ alias: string; errorKind?: string; suggestions?: string[] }>;
+      }>(client, 'run_on_many', {
+        aliases: ['web01', 'webb01'],
+        command: 'uptime',
+        concurrency: 1,
+      });
+      const missingRow = many.data.results.find(row => row.alias === 'webb01');
+      expect(missingRow?.errorKind).toBe('alias_not_found');
+      expect(missingRow?.suggestions).toContain('web01');
+    });
+  });
+
+  test('sudo tty and password failures get stable kinds and MCP-friendly hints', async () => {
+    seed([{ alias: 'web' }]);
+
+    process.env.SSHYA_SSH_BIN = writeScript(
+      'ssh-sudo-tty.sh',
+      "printf 'sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper\\n' >&2; exit 1",
+    );
+
+    await withServer({}, async (client) => {
+      const tty = await callJson<{ errorKind?: string; hint?: string }>(client, 'run_command', {
+        alias: 'web',
+        command: 'sudo systemctl restart nginx',
+        reuse: false,
+      });
+      expect(tty.isError).toBe(true);
+      expect(tty.data.errorKind).toBe('tty');
+      expect(tty.data.hint).toContain('tty: true');
+      expect(tty.data.hint).toContain('sudo -n');
+    });
+
+    process.env.SSHYA_SSH_BIN = writeScript(
+      'ssh-sudo-password.sh',
+      "printf 'sudo: a password is required\\n' >&2; exit 1",
+    );
+
+    await withServer({}, async (client) => {
+      const password = await callJson<{ errorKind?: string; hint?: string }>(client, 'run_command', {
+        alias: 'web',
+        command: 'sudo systemctl restart nginx',
+        reuse: false,
+      });
+      expect(password.data.errorKind).toBe('sudo_password');
+      expect(password.data.hint).toContain('sudo -n');
+    });
+  });
+
+  test('every failResult carries an errorKind', async () => {
+    seed([{ alias: 'web' }, { alias: 'locked', readonly: true }]);
+
+    await withServer({}, async (client) => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['get_connection', { alias: 'missing' }],
+        ['remove_connection', { alias: 'missing' }],
+        ['update_connection', { alias: 'missing', host: 'x.example.test' }],
+        ['update_connection', { alias: 'web', newAlias: '' }],
+        ['write_remote_file', { alias: 'locked', path: '/tmp/x', content: 'x' }],
+      ];
+
+      for (const [name, args] of cases) {
+        const result = await callJson<ToolError>(client, name, args);
+        expect({ name, isError: result.isError }).toEqual({ name, isError: true });
+        expect({ name, errorKind: typeof result.data.errorKind }).toEqual({ name, errorKind: 'string' });
+      }
+    });
+  });
+
+  test('tool descriptions and parameter descriptions stay short', async () => {
+    await withServer({}, async (client) => {
+      const tools = (await client.listTools()).tools;
+
+      for (const tool of tools) {
+        expect(tool.description?.length ?? 0).toBeLessThanOrEqual(180);
+        const walk = (schema: unknown): void => {
+          if (!schema || typeof schema !== 'object') return;
+          const node = schema as Record<string, unknown>;
+          if (typeof node.description === 'string') {
+            expect(node.description.length).toBeLessThanOrEqual(60);
+          }
+          for (const key of ['properties', 'items', '$defs', 'definitions']) {
+            const children = node[key];
+            if (children && typeof children === 'object') {
+              for (const child of Object.values(children)) walk(child);
+            }
+          }
+          for (const key of ['anyOf', 'oneOf', 'allOf']) {
+            const children = node[key];
+            if (Array.isArray(children)) children.forEach(walk);
+          }
+        };
+        walk(tool.inputSchema);
+      }
+    });
+  });
+});
+
 describe('MCP robustness', () => {
   test('survives a large inline stdin when the remote command exits before reading it', async () => {
     process.env.SSHYA_SSH_BIN = writeScript('ssh-exit-early.sh', "printf 'done\\n'; exit 0");

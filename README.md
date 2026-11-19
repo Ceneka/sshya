@@ -157,12 +157,31 @@ Tools: `list_connections`, `get_connection`, `add_connection`,
 `sshya://connections` (the store) and `sshya://guide` (agent conventions,
 recipes, and the active policy).
 
-`run_command` returns a superset of the old result (`ok`, `stdout`, `stderr`,
-`exitCode`, `timedOut`, `durationMs`, `reused`, byte counts, truncation flags,
-`errorKind`, `hint`). `run_on_many` fans one command out to up to 50 aliases with
-bounded concurrency. `write_remote_file` pipes bytes over SSH, so it works
+MCP responses are compact and minified by default: they keep `ok`, `exitCode`,
+streams that have content, truncation data, `errorKind`/`hint`, and drop echoed
+input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero
+counters, and false flags. Pass `verbose: true` to `run_command` or
+`run_on_many` for the full result. `run_command` still reports everything the
+CLI JSON path returns in verbose mode (`durationMs`, `reused`, byte and line
+counts, truncation flags).
+
+`list_connections` and `sshya://connections` return only `alias`, `target`
+(`user@host[:port]`), and non-empty `keyPath`/`remotePath`/`readonly`, sorted by
+most recently used. Use `get_connection` or `print_ssh_command` when you need
+ssh args or the copy-pasteable command. `run_on_many` fans one command out to up
+to 50 aliases with bounded concurrency and always reports
+`{total, succeeded, failed}`; `only: "failures"` and `match` (a regex that keeps
+only matching stdout lines) trim fleet replies, and `stdin`, `tty`, and `reuse`
+work like `run_command`. `write_remote_file` pipes bytes over SSH, so it works
 without a local scp target and supports `encoding: base64`, `append`, and
 `mode`. Neither tool allocates a TTY unless asked.
+
+An unknown alias fails with `errorKind: "alias_not_found"` and up to three
+fuzzy `suggestions` (never executed automatically). sudo failures classify as
+`tty` (retry with `tty: true`, or use `sudo -n`) or `sudo_password` (configure
+NOPASSWD or use `sudo -n`). Tool descriptions stay short; the
+[`sshya://guide`](sshya://guide) resource holds the details on pooling,
+truncation, and error handling.
 
 ### Restricting the MCP server
 

@@ -14,259 +14,249 @@
   },
   "toolCount": 12,
   "instructions": {
-    "chars": 727,
-    "tokens": 146,
-    "tokensCl100k": 146,
-    "approxTokens": 182,
-    "text": "Manage and use stored SSH connections. Call list_connections to discover aliases before running commands. run_command is a one-shot non-interactive shell; state does not persist between calls. Set cwd or include cd in the command. Connections are pooled, so repeated calls reuse a warm SSH session; pass reuse=false to force a fresh one. Output is capped and reports truncation; use maxOutputBytes or tail for large logs. On failure read errorKind and hint before retrying; unknown host keys are trusted once by default (acceptNewHostKey=false disables that). Use run_on_many for fleet checks, copy_file for transfers, and write_remote_file for small config writes. Read the sshya://guide resource for conventions and examples."
+    "chars": 253,
+    "tokens": 53,
+    "tokensCl100k": 53,
+    "approxTokens": 64,
+    "text": "SSH connection manager: call list_connections, then run_command or run_on_many. Read the sshya://guide resource before the first command for output caps, pooling, truncation advice, and error handling. Allowed aliases: all stored aliases. Read-only: no."
   },
   "toolsList": {
-    "chars": 11566,
-    "tokens": 2592,
-    "tokensCl100k": 2510,
-    "approxTokens": 2892,
-    "rawWireChars": 11600,
+    "chars": 6648,
+    "tokens": 1595,
+    "tokensCl100k": 1542,
+    "approxTokens": 1662,
+    "rawWireChars": 6682,
     "rows": [
       {
-        "name": "run_command",
-        "titleChars": 22,
-        "descriptionChars": 737,
-        "descriptionTokens": 160,
-        "schemaChars": 1205,
-        "schemaTokens": 277,
-        "totalChars": 2069,
-        "totalTokens": 464,
-        "paramCount": 10,
-        "paramDescriptionTokens": 104
-      },
-      {
-        "name": "write_remote_file",
-        "titleChars": 19,
-        "descriptionChars": 421,
-        "descriptionTokens": 92,
-        "schemaChars": 1075,
-        "schemaTokens": 266,
-        "totalChars": 1626,
-        "totalTokens": 385,
-        "paramCount": 9,
-        "paramDescriptionTokens": 91
-      },
-      {
         "name": "run_on_many",
-        "titleChars": 36,
-        "descriptionChars": 298,
-        "descriptionTokens": 64,
-        "schemaChars": 1086,
-        "schemaTokens": 252,
-        "totalChars": 1525,
-        "totalTokens": 345,
-        "paramCount": 9,
-        "paramDescriptionTokens": 70
+        "titleChars": 0,
+        "descriptionChars": 31,
+        "descriptionTokens": 7,
+        "schemaChars": 1050,
+        "schemaTokens": 258,
+        "totalChars": 1175,
+        "totalTokens": 285,
+        "paramCount": 15,
+        "paramDescriptionTokens": 24
       },
       {
-        "name": "copy_file",
-        "titleChars": 20,
-        "descriptionChars": 205,
-        "descriptionTokens": 40,
-        "schemaChars": 795,
-        "schemaTokens": 182,
-        "totalChars": 1123,
-        "totalTokens": 249,
-        "paramCount": 9,
-        "paramDescriptionTokens": 38
-      },
-      {
-        "name": "add_connection",
-        "titleChars": 21,
-        "descriptionChars": 96,
-        "descriptionTokens": 21,
-        "schemaChars": 696,
-        "schemaTokens": 161,
-        "totalChars": 921,
-        "totalTokens": 209,
-        "paramCount": 7,
-        "paramDescriptionTokens": 43
-      },
-      {
-        "name": "test_connection",
-        "titleChars": 22,
-        "descriptionChars": 223,
-        "descriptionTokens": 51,
-        "schemaChars": 547,
-        "schemaTokens": 124,
-        "totalChars": 937,
-        "totalTokens": 209,
-        "paramCount": 4,
-        "paramDescriptionTokens": 37
-      },
-      {
-        "name": "import_connections",
-        "titleChars": 22,
-        "descriptionChars": 145,
-        "descriptionTokens": 25,
-        "schemaChars": 563,
-        "schemaTokens": 130,
+        "name": "run_command",
+        "titleChars": 0,
+        "descriptionChars": 34,
+        "descriptionTokens": 8,
+        "schemaChars": 714,
+        "schemaTokens": 175,
         "totalChars": 842,
-        "totalTokens": 180,
-        "paramCount": 2,
-        "paramDescriptionTokens": 9
-      },
-      {
-        "name": "update_connection",
-        "titleChars": 24,
-        "descriptionChars": 131,
-        "descriptionTokens": 26,
-        "schemaChars": 413,
-        "schemaTokens": 101,
-        "totalChars": 679,
-        "totalTokens": 153,
-        "paramCount": 7,
-        "paramDescriptionTokens": 10
-      },
-      {
-        "name": "print_ssh_command",
-        "titleChars": 20,
-        "descriptionChars": 183,
-        "descriptionTokens": 35,
-        "schemaChars": 305,
-        "schemaTokens": 66,
-        "totalChars": 655,
-        "totalTokens": 137,
-        "paramCount": 2,
+        "totalTokens": 202,
+        "paramCount": 11,
         "paramDescriptionTokens": 15
       },
       {
-        "name": "get_connection",
-        "titleChars": 21,
-        "descriptionChars": 49,
-        "descriptionTokens": 10,
-        "schemaChars": 184,
-        "schemaTokens": 44,
-        "totalChars": 398,
-        "totalTokens": 88,
-        "paramCount": 1,
+        "name": "write_remote_file",
+        "titleChars": 0,
+        "descriptionChars": 32,
+        "descriptionTokens": 8,
+        "schemaChars": 533,
+        "schemaTokens": 145,
+        "totalChars": 665,
+        "totalTokens": 173,
+        "paramCount": 9,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "copy_file",
+        "titleChars": 0,
+        "descriptionChars": 20,
+        "descriptionTokens": 6,
+        "schemaChars": 566,
+        "schemaTokens": 138,
+        "totalChars": 678,
+        "totalTokens": 163,
+        "paramCount": 9,
         "paramDescriptionTokens": 3
+      },
+      {
+        "name": "import_connections",
+        "titleChars": 0,
+        "descriptionChars": 19,
+        "descriptionTokens": 3,
+        "schemaChars": 492,
+        "schemaTokens": 122,
+        "totalChars": 612,
+        "totalTokens": 144,
+        "paramCount": 2,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "add_connection",
+        "titleChars": 0,
+        "descriptionChars": 37,
+        "descriptionTokens": 7,
+        "schemaChars": 393,
+        "schemaTokens": 102,
+        "totalChars": 527,
+        "totalTokens": 128,
+        "paramCount": 8,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "update_connection",
+        "titleChars": 0,
+        "descriptionChars": 25,
+        "descriptionTokens": 4,
+        "schemaChars": 349,
+        "schemaTokens": 91,
+        "totalChars": 474,
+        "totalTokens": 114,
+        "paramCount": 8,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "test_connection",
+        "titleChars": 0,
+        "descriptionChars": 23,
+        "descriptionTokens": 4,
+        "schemaChars": 289,
+        "schemaTokens": 75,
+        "totalChars": 446,
+        "totalTokens": 106,
+        "paramCount": 4,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "print_ssh_command",
+        "titleChars": 0,
+        "descriptionChars": 26,
+        "descriptionTokens": 6,
+        "schemaChars": 178,
+        "schemaTokens": 44,
+        "totalChars": 340,
+        "totalTokens": 79,
+        "paramCount": 2,
+        "paramDescriptionTokens": 0
+      },
+      {
+        "name": "get_connection",
+        "titleChars": 0,
+        "descriptionChars": 40,
+        "descriptionTokens": 8,
+        "schemaChars": 145,
+        "schemaTokens": 38,
+        "totalChars": 318,
+        "totalTokens": 73,
+        "paramCount": 1,
+        "paramDescriptionTokens": 0
       },
       {
         "name": "remove_connection",
-        "titleChars": 24,
-        "descriptionChars": 44,
-        "descriptionTokens": 8,
-        "schemaChars": 184,
-        "schemaTokens": 44,
-        "totalChars": 402,
-        "totalTokens": 86,
+        "titleChars": 0,
+        "descriptionChars": 20,
+        "descriptionTokens": 4,
+        "schemaChars": 145,
+        "schemaTokens": 38,
+        "totalChars": 304,
+        "totalTokens": 69,
         "paramCount": 1,
-        "paramDescriptionTokens": 3
+        "paramDescriptionTokens": 0
       },
       {
         "name": "list_connections",
-        "titleChars": 20,
-        "descriptionChars": 115,
-        "descriptionTokens": 26,
+        "titleChars": 0,
+        "descriptionChars": 24,
+        "descriptionTokens": 4,
         "schemaChars": 85,
         "schemaTokens": 24,
-        "totalChars": 366,
-        "totalTokens": 83,
+        "totalChars": 244,
+        "totalTokens": 55,
         "paramCount": 0,
         "paramDescriptionTokens": 0
       }
     ]
   },
   "resourcesList": {
-    "chars": 344,
-    "tokens": 76,
-    "tokensCl100k": 75,
-    "approxTokens": 86,
-    "rawWireChars": 378,
+    "chars": 400,
+    "tokens": 86,
+    "tokensCl100k": 85,
+    "approxTokens": 100,
+    "rawWireChars": 434,
     "resources": [
       {
         "name": "connections",
         "title": "SSH connections",
         "uri": "sshya://connections",
-        "description": "All stored SSH connections as JSON.",
+        "description": "Stored SSH connections as JSON, filtered to the active policy.",
         "mimeType": "application/json"
       },
       {
         "name": "guide",
         "title": "Using sshya from an agent",
         "uri": "sshya://guide",
-        "description": "Conventions and recipes for calling sshya over MCP.",
+        "description": "Conventions and recipes for calling sshya over MCP, including the active policy.",
         "mimeType": "text/markdown"
       }
     ]
   },
   "guide": {
-    "chars": 1734,
-    "tokens": 454,
-    "tokensCl100k": 451,
-    "approxTokens": 434,
-    "wrappedChars": 1833,
-    "rawWireChars": 1867
+    "chars": 3568,
+    "tokens": 881,
+    "tokensCl100k": 876,
+    "approxTokens": 892,
+    "wrappedChars": 3686,
+    "rawWireChars": 3720
   },
   "alwaysOn": {
-    "chars": 12293,
-    "tokens": 2738,
-    "approxTokens": 3074
+    "chars": 6901,
+    "tokens": 1648,
+    "approxTokens": 1726
   },
   "withGuide": {
-    "chars": 14027,
-    "tokens": 3192,
-    "approxTokens": 3507
+    "chars": 10469,
+    "tokens": 2529,
+    "approxTokens": 2618
   },
   "protocolEnvelope": {
-    "initializeResponseChars": 938
+    "initializeResponseChars": 464
   },
   "redundancy": {
     "repeatedSentences": [
       {
-        "sentence": "trust a previously unknown host key on first contact (default true)",
-        "count": 3,
-        "wastedTokens": 26
-      },
-      {
-        "sentence": "reuse a pooled connection when available (default true)",
-        "count": 3,
-        "wastedTokens": 20
-      },
-      {
-        "sentence": "abort after this many milliseconds (default 120000)",
+        "sentence": "keep end when truncating",
         "count": 2,
-        "wastedTokens": 11
+        "wastedTokens": 5
       }
     ],
-    "wastedTokens": 57,
+    "wastedTokens": 5,
     "shingleSize": 10,
-    "repeatedShingles": 4,
-    "duplicatedRuns": 6,
+    "repeatedShingles": 0,
+    "duplicatedRuns": 0,
     "repeatedParamDescriptions": [
       {
-        "description": "Trust a previously unknown host key on first contact (default true)",
-        "count": 3,
-        "tokensEach": 13,
-        "wastedTokens": 26
-      },
-      {
-        "description": "Reuse a pooled connection when available (default true)",
-        "count": 3,
-        "tokensEach": 10,
-        "wastedTokens": 20
-      },
-      {
-        "description": "Exact connection alias",
-        "count": 7,
-        "tokensEach": 3,
-        "wastedTokens": 18
-      },
-      {
-        "description": "Abort after this many milliseconds (default 120000)",
+        "description": "Keep end when truncating",
         "count": 2,
-        "tokensEach": 11,
-        "wastedTokens": 11
+        "tokensEach": 5,
+        "wastedTokens": 5
+      },
+      {
+        "description": "Output cap per stream",
+        "count": 2,
+        "tokensEach": 4,
+        "wastedTokens": 4
+      },
+      {
+        "description": "Remote stdin data",
+        "count": 2,
+        "tokensEach": 3,
+        "wastedTokens": 3
+      },
+      {
+        "description": "Full result shape",
+        "count": 2,
+        "tokensEach": 3,
+        "wastedTokens": 3
       }
     ],
     "boilerplate": {
-      "titles": 50,
+      "titles": 0,
       "schemaDialect": {
         "occurrences": 12,
         "tokens": 132
@@ -284,34 +274,34 @@
         "tokens": 42
       },
       "parameterDescriptions": {
-        "tokens": 423
+        "tokens": 42
       },
-      "descriptionTokens": 558,
-      "schemaTokens": 1671
+      "descriptionTokens": 69,
+      "schemaTokens": 1250
     }
   },
   "projection": {
     "note": "Projection only: tools/list JSON transformed in memory; no product change.",
     "currentToolsList": {
-      "chars": 11566,
-      "tokens": 2592
+      "chars": 6648,
+      "tokens": 1595
     },
     "slim40": {
-      "chars": 8822,
-      "tokens": 2025
+      "chars": 6648,
+      "tokens": 1595
     },
     "slim60": {
-      "chars": 9252,
-      "tokens": 2111
+      "chars": 6648,
+      "tokens": 1595
     },
     "leanNoParamDescriptions": {
-      "chars": 6366,
-      "tokens": 1539
+      "chars": 6218,
+      "tokens": 1516
     },
-    "instructionAndToolTotalCurrent": 2738,
-    "instructionAndToolTotalSlim40": 2171,
-    "instructionAndToolTotalLean": 1685,
-    "savingsTokens": 567,
-    "leanSavingsTokens": 1053
+    "instructionAndToolTotalCurrent": 1648,
+    "instructionAndToolTotalSlim40": 1648,
+    "instructionAndToolTotalLean": 1569,
+    "savingsTokens": 0,
+    "leanSavingsTokens": 79
   }
 }
