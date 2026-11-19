@@ -98,6 +98,7 @@
 - `package.json` bins: `sshya` → `dist/index.js`, `s` → `dist/s.js` (built artifacts; `index.ts` / `s.ts` are the Bun-run dev entrypoints)
 - `index.ts` must not read `import.meta.main` directly: Bun's bundler rewrites it into a Bun-only `require` shim that throws under Node. It reads the property dynamically and falls back to comparing `argv[1]` with `import.meta.url`
 - Runtime code must stay Node-compatible (no `Bun.*`, `bun:` imports, or `import.meta.dir`); run `bun run build` before `npm pack` / `npm publish`
+- Startup path: `index.ts` registers commander commands only; every action dynamically imports its command module. Heavy dependencies stay dynamic at their use site too — `inquirer` (prompts), `fuse.js` (fuzzy alias search), `zod` (`src/schema.ts` `loadConnectionSchema`), and the MCP SDK (`createMcpServer`). Bun's bundler hoists *static* external imports into the single `dist/index.js` even when the local module is only reached through `await import()`, so new heavy deps must be imported dynamically inside functions to stay off `--version`/`list`/`run`
 - Usage tracking via `lastUsed` timestamps
 - Interactive commands guard on `process.stdin.isTTY`; no-TTY runs fail instead of hanging
 - `run`/`test` default to `BatchMode=yes`, `-T`, and a connect timeout

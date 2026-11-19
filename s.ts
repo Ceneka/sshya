@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { connectConnectionPrompt } from './src/connection';
+import { connectConnectionPrompt } from './src/connection/connect';
 import { initDB } from './src/database';
 import { enableEscapeExit } from './src/helpers/escExit';
 

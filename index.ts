@@ -2,20 +2,18 @@
 
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import chalk from 'chalk';
 import { Command, InvalidArgumentError } from 'commander';
 import pkg from './package.json' with { type: "json" };
-import { addConnectionPrompt, connectConnectionPrompt, copyConnectionPrompt, doctorCommand, exportConnectionsPrompt, importConnectionsPrompt, listConnectionsPrompt, poolCommand, removeConnectionPrompt, resolveRunTimeoutMs, runConnectionPrompt, showConnectionPrompt, testConnectionPrompt, updateConnectionPrompt } from './src/connection';
 import { initDB } from './src/database';
 import { parseByteSize, type CaptureMode } from './src/helpers/capture';
-import { printConnectionsPrompt } from './src/helpers/connection';
-import { enableEscapeExit } from './src/helpers/escExit';
-import { runFzfLauncher } from './src/helpers/fzf';
 import type { HostKeyChecking } from './src/helpers/ssh';
 
 const version = pkg?.version ?? '1.0.0';
 
+// Startup hot path: only commander and the tiny helpers above are evaluated up
+// front. Interactive terminal setup is skipped entirely for piped runs.
 if (process.stdin.isTTY && process.stdout.isTTY) {
+  const { enableEscapeExit } = await import('./src/helpers/escExit');
   enableEscapeExit();
 }
 
@@ -70,11 +68,12 @@ const parseTimeoutSeconds = (value: string): string => {
   return value;
 };
 
-const resolveHostKeyChecking = (options: {
+const resolveHostKeyChecking = async (options: {
   acceptNewHostKey?: boolean;
   strictHostKey?: boolean;
-}): HostKeyChecking | undefined => {
+}): Promise<HostKeyChecking | undefined> => {
   if (options.acceptNewHostKey && options.strictHostKey) {
+    const { default: chalk } = await import('chalk');
     console.error(chalk.red('--accept-new-host-key and --strict-host-key are mutually exclusive.'));
     process.exit(1);
   }
@@ -95,7 +94,10 @@ program
   .command('connect [alias]')
   .aliases(['ssh', 'go'])
   .description('Connect to an SSH connection by alias')
-  .action(connectConnectionPrompt);
+  .action(async (alias?: string) => {
+    const { connectConnectionPrompt } = await import('./src/connection/connect');
+    return connectConnectionPrompt(alias);
+  });
 
 program
   .command('run <alias> [command...]')
@@ -114,7 +116,7 @@ program
   .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
   .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string, commandParts: string[] | undefined, options: {
+  .action(async (alias: string, commandParts: string[] | undefined, options: {
     tty?: boolean;
     allowPassword?: boolean;
     connectTimeout?: string;
@@ -129,6 +131,7 @@ program
     strictHostKey?: boolean;
     json?: boolean;
   }) => {
+    const { runConnectionPrompt, resolveRunTimeoutMs } = await import('./src/connection/run');
     return runConnectionPrompt(alias, commandParts ?? [], {
       tty: !!options.tty,
       batchMode: !options.allowPassword,
@@ -139,7 +142,7 @@ program
       noStdin: options.stdin === false,
       maxOutputBytes: options.maxOutput,
       outputMode: options.truncate ?? (options.tail ? 'tail' : undefined),
-      hostKeyChecking: resolveHostKeyChecking(options),
+      hostKeyChecking: await resolveHostKeyChecking(options),
       json: !!options.json,
     });
   });
@@ -156,7 +159,7 @@ program
   .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
   .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, source: string | undefined, destination: string | undefined, options: {
+  .action(async (alias: string | undefined, source: string | undefined, destination: string | undefined, options: {
     download?: boolean;
     recursive?: boolean;
     preserve?: boolean;
@@ -166,13 +169,14 @@ program
     strictHostKey?: boolean;
     json?: boolean;
   }) => {
+    const { copyConnectionPrompt } = await import('./src/connection/copy');
     return copyConnectionPrompt(alias, source, destination, {
       download: !!options.download,
       recursive: !!options.recursive,
       preserve: !!options.preserve,
       timeoutMs: secondsToMs(options.timeout),
       reuse: options.reuse !== false,
-      hostKeyChecking: resolveHostKeyChecking(options),
+      hostKeyChecking: await resolveHostKeyChecking(options),
       json: !!options.json,
     });
   });
@@ -181,14 +185,20 @@ program
   .command('print [alias]')
   .description('Print an SSH connection by alias')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: { json?: boolean }) => printConnectionsPrompt(alias, options));
+  .action(async (alias: string | undefined, options: { json?: boolean }) => {
+    const { printConnectionsPrompt } = await import('./src/helpers/connection');
+    return printConnectionsPrompt(alias, options);
+  });
 
 program
   .command('show [alias]')
   .aliases(['inspect', 'get'])
   .description('Show one connection with ready-to-run SSH commands')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: { json?: boolean }) => showConnectionPrompt(alias, options));
+  .action(async (alias: string | undefined, options: { json?: boolean }) => {
+    const { showConnectionPrompt } = await import('./src/connection/show');
+    return showConnectionPrompt(alias, options);
+  });
 
 program
   .command('add [alias] [target]')
@@ -202,7 +212,7 @@ program
   .option('-f, --force', 'Replace a connection with the same alias')
   .option('--test', 'Test connectivity after saving')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, target: string | undefined, options: {
+  .action(async (alias: string | undefined, target: string | undefined, options: {
     user?: string;
     host?: string;
     port?: string;
@@ -211,7 +221,10 @@ program
     force?: boolean;
     test?: boolean;
     json?: boolean;
-  }) => addConnectionPrompt(alias, target, options));
+  }) => {
+    const { addConnectionPrompt } = await import('./src/connection/add');
+    return addConnectionPrompt(alias, target, options);
+  });
 
 program
   .command('list')
@@ -220,18 +233,24 @@ program
   .option('--oneline', 'Output each connection as ssh args on one line')
   .option('--names', 'Include alias as first column (tab-separated) with --oneline')
   .option('--json', 'Machine-readable JSON output')
-  .action((options: { oneline?: boolean; names?: boolean; json?: boolean }) => listConnectionsPrompt({
-    oneline: !!options?.oneline,
-    names: !!options?.names,
-    json: !!options?.json,
-  }));
+  .action(async (options: { oneline?: boolean; names?: boolean; json?: boolean }) => {
+    const { listConnectionsPrompt } = await import('./src/connection/list');
+    return listConnectionsPrompt({
+      oneline: !!options?.oneline,
+      names: !!options?.names,
+      json: !!options?.json,
+    });
+  });
 
 program
   .command('remove [alias]')
   .aliases(['delete', 'rm'])
   .description('Remove an SSH connection by alias')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: { json?: boolean }) => removeConnectionPrompt(alias, options));
+  .action(async (alias: string | undefined, options: { json?: boolean }) => {
+    const { removeConnectionPrompt } = await import('./src/connection/remove');
+    return removeConnectionPrompt(alias, options);
+  });
 
 program
   .command('update [alias]')
@@ -245,7 +264,7 @@ program
   .option('--new-alias <alias>', 'Rename the connection')
   .option('--test', 'Test connectivity after saving')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: {
+  .action(async (alias: string | undefined, options: {
     user?: string;
     host?: string;
     port?: string;
@@ -254,7 +273,10 @@ program
     newAlias?: string;
     test?: boolean;
     json?: boolean;
-  }) => updateConnectionPrompt(alias, options));
+  }) => {
+    const { updateConnectionPrompt } = await import('./src/connection/update');
+    return updateConnectionPrompt(alias, options);
+  });
 
 program
   .command('test [alias]')
@@ -264,26 +286,31 @@ program
   .option('--accept-new-host-key', 'Trust an unknown host key on first contact (TOFU)')
   .option('--strict-host-key', 'Fail if the host key is not already known')
   .option('--json', 'Machine-readable JSON output')
-  .action((alias: string | undefined, options: {
+  .action(async (alias: string | undefined, options: {
     timeout?: string;
     reuse?: boolean;
     acceptNewHostKey?: boolean;
     strictHostKey?: boolean;
     json?: boolean;
-  }) => testConnectionPrompt(alias, {
-    timeoutMs: secondsToMs(options.timeout) ?? 5000,
-    reuse: options.reuse !== false,
-    hostKeyChecking: resolveHostKeyChecking(options),
-    json: !!options.json,
-  }));
+  }) => {
+    const { testConnectionPrompt } = await import('./src/connection/test');
+    return testConnectionPrompt(alias, {
+      timeoutMs: secondsToMs(options.timeout) ?? 5000,
+      reuse: options.reuse !== false,
+      hostKeyChecking: await resolveHostKeyChecking(options),
+      json: !!options.json,
+    });
+  });
 
 program
   .command('pool [action] [alias]')
   .description('Inspect or close pooled SSH connections (list, close)')
   .option('--all', 'Close every pooled connection (with close)')
   .option('--json', 'Machine-readable JSON output')
-  .action((action: string | undefined, alias: string | undefined, options: { all?: boolean; json?: boolean }) =>
-    poolCommand(action, alias, options));
+  .action(async (action: string | undefined, alias: string | undefined, options: { all?: boolean; json?: boolean }) => {
+    const { poolCommand } = await import('./src/connection/pool');
+    return poolCommand(action, alias, options);
+  });
 
 program
   .command('doctor')
@@ -292,28 +319,33 @@ program
   .option('--timeout <seconds>', 'Probe timeout in seconds', '5')
   .option('--accept-new-host-key', 'Trust unknown host keys while probing (TOFU)')
   .option('--json', 'Machine-readable JSON output')
-  .action((options: {
+  .action(async (options: {
     probe?: boolean;
     timeout?: string;
     acceptNewHostKey?: boolean;
     json?: boolean;
-  }) => doctorCommand({
-    probe: !!options.probe,
-    timeoutMs: secondsToMs(options.timeout) ?? 5000,
-    acceptNewHostKey: !!options.acceptNewHostKey,
-    json: !!options.json,
-  }));
+  }) => {
+    const { doctorCommand } = await import('./src/connection/doctor');
+    return doctorCommand({
+      probe: !!options.probe,
+      timeoutMs: secondsToMs(options.timeout) ?? 5000,
+      acceptNewHostKey: !!options.acceptNewHostKey,
+      json: !!options.json,
+    });
+  });
 
 program
   .command('import [file]')
   .description('Import connections from a JSON file (use - for stdin)')
   .option('--strategy <strategy>', 'Conflict handling: ask, skip, overwrite, or error', 'ask')
   .option('--json', 'Machine-readable JSON output')
-  .action((file: string | undefined, options: { strategy?: string; json?: boolean }) => {
+  .action(async (file: string | undefined, options: { strategy?: string; json?: boolean }) => {
     if (!file) {
+      const { default: chalk } = await import('chalk');
       console.error(chalk.red('File is required. Use - to read from stdin.'));
       process.exit(1);
     }
+    const { importConnectionsPrompt } = await import('./src/connection/import');
     return importConnectionsPrompt(file, {
       strategy: options.strategy as 'ask' | 'skip' | 'overwrite' | 'error' | undefined,
       json: !!options.json,
@@ -324,12 +356,18 @@ program
   .command('export [file]')
   .description('Export connections to a JSON file (use - for stdout)')
   .option('--json', 'Machine-readable JSON output')
-  .action((file: string | undefined, options: { json?: boolean }) => exportConnectionsPrompt(file ?? 'sshm-export.json', options));
+  .action(async (file: string | undefined, options: { json?: boolean }) => {
+    const { exportConnectionsPrompt } = await import('./src/connection/export');
+    return exportConnectionsPrompt(file ?? 'sshm-export.json', options);
+  });
 
 program
   .command('fzf')
   .description('Select a connection with fzf and connect')
-  .action(runFzfLauncher);
+  .action(async () => {
+    const { runFzfLauncher } = await import('./src/helpers/fzf');
+    return runFzfLauncher();
+  });
 
 program
   .command('mcp')
@@ -347,7 +385,8 @@ program
 program
   .command('path')
   .description('Provides instructions to make the CLI globally accessible')
-  .action(() => {
+  .action(async () => {
+    const { default: chalk } = await import('chalk');
     console.log(chalk.yellow('To make the ' + chalk.bold('s') + ' command globally accessible:'));
     console.log('\n' + chalk.bold('Option 1: Permanent Installation (Recommended)') + '\n');
     console.log('1. Install the package globally: ' + chalk.cyan('npm install -g sshya'));
@@ -365,7 +404,8 @@ program
 program
   .command('about')
   .description('About this CLI')
-  .action(() => {
+  .action(async () => {
+    const { default: chalk } = await import('chalk');
     console.log(chalk.bold('SSHya CLI'));
     console.log(chalk.gray(`Version ${version}`));
     console.log(chalk.gray('https://github.com/ceneka/sshya'));
