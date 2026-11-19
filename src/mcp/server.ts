@@ -18,6 +18,7 @@ import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand, quoteRemoteP
 import { executeCopy } from '../connection/copy';
 import { executeSshCommand } from '../connection/run';
 import { testConnection } from '../connection/test';
+import { registerFileTools, buildAtomicWriteCommand } from './fileTools';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
 type ToolResult = {
@@ -422,7 +423,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           'Write a file on a stored connection by piping bytes through SSH (no scp temp file).',
           'Content is UTF-8 by default; set encoding=base64 for binary data. Paths are relative to remotePath unless absolute.',
           'Pass append=true to append, createParents=true to mkdir -p first, and mode to chmod afterwards.',
-          'The write is not atomic: a failed transfer can leave a partial file. Use run_command with a temporary path when that matters.',
+          'Set atomic=true to write a temp file in the same directory and rename it into place, preserving the existing mode/owner where possible.',
           'Refused when the connection is marked readonly or the alias is outside the active MCP policy.',
         ].join(' '),
         inputSchema: {
@@ -433,11 +434,12 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           append: z.boolean().optional().describe('Append instead of truncating (default false)'),
           createParents: z.boolean().optional().describe('Run mkdir -p on the parent directory first'),
           mode: z.string().regex(/^[0-7]{3,4}$/).optional().describe('chmod mode such as 600 or 0644'),
+          atomic: z.boolean().optional().describe('Write a temp file and rename it into place (default false)'),
           timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
           acceptNewHostKey: z.boolean().optional().describe('Trust an unknown host key on first contact (default true)'),
         },
       },
-      async ({ alias, path: remotePath, content, encoding, append, createParents, mode, timeoutMs, acceptNewHostKey }) => {
+      async ({ alias, path: remotePath, content, encoding, append, createParents, mode, atomic, timeoutMs, acceptNewHostKey }) => {
         if (!policy.isAliasAllowed(alias)) {
           return aliasDenial(policy, alias);
         }
@@ -465,9 +467,20 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           commands.push(`mkdir -p -- ${quoteRemotePath(parent)}`);
         }
 
-        commands.push(`cat ${append ? '>>' : '>'} ${quotedPath}`);
-        if (mode) {
-          commands.push(`chmod ${mode} -- ${quotedPath}`);
+        if (atomic === true) {
+          commands.push(buildAtomicWriteCommand({
+            target: remotePath,
+            append,
+            mode,
+            // With append the final size depends on the existing file, so only
+            // verify the byte count for a full replacement.
+            expectedBytes: append ? undefined : data.byteLength,
+          }));
+        } else {
+          commands.push(`cat ${append ? '>>' : '>'} ${quotedPath}`);
+          if (mode) {
+            commands.push(`chmod ${mode} -- ${quotedPath}`);
+          }
         }
 
         recordConnectionUsage(alias);
@@ -489,6 +502,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             bytesWritten: result.ok ? data.byteLength : 0,
             encoding: encoding ?? 'utf8',
             appended: append === true,
+            atomic: atomic === true,
             reused: result.reused,
             durationMs: result.durationMs,
             ...(result.ok ? {} : { errorKind: result.errorKind, hint: result.hint, stderr: result.stderr }),
@@ -678,6 +692,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     );
   }
 
+  registerFileTools(server, policy);
+
   server.registerResource(
     'connections',
     'sshya://connections',
@@ -726,8 +742,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '',
           '## Tools',
           policy.readOnly
-            ? '- Available: list_connections, get_connection, test_connection, run_command, run_on_many, copy_file (download only), and print_ssh_command.'
-            : '- Available: list_connections, get_connection, add_connection, update_connection, remove_connection, import_connections, test_connection, run_command, run_on_many, write_remote_file, copy_file, and print_ssh_command.',
+            ? '- Available: list_connections, get_connection, test_connection, run_command, run_on_many, read_remote_file, grep_remote, stat_remote, copy_file (download only), and print_ssh_command.'
+            : '- Available: list_connections, get_connection, add_connection, update_connection, remove_connection, import_connections, test_connection, run_command, run_on_many, read_remote_file, replace_in_remote_file, grep_remote, stat_remote, write_remote_file, copy_file, and print_ssh_command.',
           '',
           '## Mental model',
           '- Each `run_command` is an independent, non-interactive shell. There is no live shell between calls: `cd` and exports do not persist.',
@@ -741,14 +757,17 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '- `ok` is true only when the remote exit code is 0 and the command did not time out.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `invalid-path`, `unknown`, `ssh-missing`, plus policy kinds `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `invalid-path`, `unknown`, `ssh-missing`, `not_found`, `is_a_directory`, `permission_denied`, `binary_file`, `file_too_large`, `match_count`, `conflict`, `grep_failed`, `invalid_pattern`, plus policy kinds `alias_not_allowed`, `read_only`, and `connection_readonly`.',
           '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` for sudo.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
           '',
           '## Files',
+          '- `read_remote_file` returns a numbered line range (`offset`/`limit`, byte-capped) plus `totalLines`; prefer it over `cat` for large files.',
+          '- `replace_in_remote_file` replaces an exact string, verifies `expectedCount`, and writes atomically. It refuses files over 2 MiB and returns `errorKind: "match_count"` or `"conflict"` instead of guessing.',
+          '- `grep_remote` returns `file:line:text` matches; `stat_remote` returns size/mode/mtime/type. Both avoid parsing `ls -l` in the model.',
           '- `copy_file` uses scp for uploads/downloads.',
-          '- `write_remote_file` pipes bytes through SSH; it is convenient for configs and small binary payloads but is not atomic.',
-          '- A connection with `readonly: true` refuses write_remote_file and copy_file uploads. The flag does not restrict run_command.',
+          '- `write_remote_file` pipes bytes through SSH; pass `atomic: true` to write a temp file and rename it into place.',
+          '- A connection with `readonly: true` refuses replace_in_remote_file, write_remote_file, and copy_file uploads. The flag does not restrict run_command.',
           '',
           '## Safety',
           '- Unknown host keys are trusted once (TOFU) by default in MCP. Pass `acceptNewHostKey: false` when that is not acceptable.',

@@ -152,7 +152,8 @@ works. Add an `env` block with `SSHYA_DB` to isolate an agent workspace:
 
 Tools: `list_connections`, `get_connection`, `add_connection`,
 `update_connection`, `remove_connection`, `test_connection`, `run_command`,
-`run_on_many`, `write_remote_file`, `copy_file`, `print_ssh_command`, and
+`run_on_many`, `read_remote_file`, `replace_in_remote_file`, `grep_remote`,
+`stat_remote`, `write_remote_file`, `copy_file`, `print_ssh_command`, and
 `import_connections` (mutating tools are absent in read-only mode). Resources:
 `sshya://connections` (the store) and `sshya://guide` (agent conventions,
 recipes, and the active policy).
@@ -160,9 +161,16 @@ recipes, and the active policy).
 `run_command` returns a superset of the old result (`ok`, `stdout`, `stderr`,
 `exitCode`, `timedOut`, `durationMs`, `reused`, byte counts, truncation flags,
 `errorKind`, `hint`). `run_on_many` fans one command out to up to 50 aliases with
-bounded concurrency. `write_remote_file` pipes bytes over SSH, so it works
-without a local scp target and supports `encoding: base64`, `append`, and
-`mode`. Neither tool allocates a TTY unless asked.
+bounded concurrency. `read_remote_file` returns a numbered line range plus the
+file's total line count in one round trip, so agents do not have to `cat` a
+large file. `replace_in_remote_file` replaces an exact string, verifies the
+occurrence count, and renames a temp file into place instead of re-uploading the
+whole file through the model; it reports `match_count` and `conflict` instead of
+guessing. `grep_remote` returns compact `file:line:text` matches, and
+`stat_remote` reports size/mode/mtime/type. `write_remote_file` pipes bytes over
+SSH, so it works without a local scp target and supports `encoding: base64`,
+`append`, `mode`, and `atomic: true` (temp file plus rename). None of these
+tools allocate a TTY unless asked.
 
 ### Restricting the MCP server
 
@@ -191,15 +199,18 @@ SSHYA_MCP_ALLOW='web,stg-*' SSHYA_MCP_READ_ONLY=1 sshya mcp
   `sshya://connections` only return allowed aliases, and `add_connection` /
   `import_connections` can only create allowed aliases.
 - `--read-only` / `SSHYA_MCP_READ_ONLY=1` does not register `add_connection`,
-  `update_connection`, `remove_connection`, `import_connections`, or
-  `write_remote_file`, and restricts `copy_file` to `direction: "download"`.
+  `update_connection`, `remove_connection`, `import_connections`,
+  `write_remote_file`, or `replace_in_remote_file`, and restricts `copy_file` to
+  `direction: "download"`. `read_remote_file`, `grep_remote`, and `stat_remote`
+  remain available.
 - `copy`/`copy_file` refuse a local path that scp would reinterpret as a remote
   target (`host:path`) or that starts with `-`, so a read-only download cannot
   be turned into an upload to another host.
-- A connection can be marked `readonly: true` to refuse `write_remote_file` and
-  `copy_file` uploads for that alias (`errorKind: "connection_readonly"`).
-  `add_connection`, `update_connection`, and `import_connections` accept the
-  flag, and `update_connection` with `readonly: false` clears it.
+- A connection can be marked `readonly: true` to refuse `replace_in_remote_file`,
+  `write_remote_file`, and `copy_file` uploads for that alias
+  (`errorKind: "connection_readonly"`). `add_connection`, `update_connection`,
+  and `import_connections` accept the flag, and `update_connection` with
+  `readonly: false` clears it.
 
 Read-only mode guards the sshya store against MCP mutations and the remote host
 against uploads. It does **not** sandbox anything: `run_command` and
@@ -226,7 +237,7 @@ The main application logic is in `index.ts`. SSH arguments are built in-process 
 
 Agent-facing behavior lives in three small helpers: `src/helpers/control.ts` (ControlMaster socket paths and lifecycle), `src/helpers/capture.ts` (bounded, UTF-8-safe stream capture with truncation metadata), and `src/helpers/errors.ts` (stable error classes plus actionable hints). `src/connection/run.ts` is the one-shot executor used by both `sshya run` and the MCP `run_command`/`run_on_many` tools.
 
-The MCP server lives in `src/mcp/server.ts`. It reuses the same database and command helpers as the CLI, writes protocol messages to stdout only, and keeps diagnostics off the protocol channel. The connection store can be redirected with `SSHYA_DB`.
+The MCP server lives in `src/mcp/server.ts`. It reuses the same database and command helpers as the CLI, writes protocol messages to stdout only, and keeps diagnostics off the protocol channel. The connection store can be redirected with `SSHYA_DB`. Remote file tools (`read_remote_file`, `replace_in_remote_file`, `grep_remote`, `stat_remote`, plus the atomic write helper) live in `src/mcp/fileTools.ts` and share the same SSH executor and policy checks.
 
 ## Installation
 
