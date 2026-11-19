@@ -97,8 +97,8 @@ export async function addConnectionPrompt(
 
     const cleanup = enableEscapeExit();
     try {
-      const { default: inquirer } = await import('inquirer');
-      const answers = await inquirer.prompt([
+      const { prompt } = await import('../lib/prompts');
+      const answers = await prompt([
         {
           type: 'input',
           name: 'alias',
@@ -156,7 +156,7 @@ export async function addConnectionPrompt(
         return;
       }
 
-      const { test } = await inquirer.prompt([
+      const { test } = await prompt([
         {
           type: 'confirm',
           name: 'test',

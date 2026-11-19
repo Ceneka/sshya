@@ -258,11 +258,13 @@ and `copy_file` downloads still write local files at the caller-chosen path.
 - **Dependencies:** bundled into `dist` at build time (listed in
   `devDependencies`):
     - `commander`: For command-line argument parsing.
-    - `inquirer`: For interactive prompts.
-    - `chalk`: for terminal string styling.
-    - `fuse.js`: for fuzzy searching connections.
     - `zod`: for validating user input and imported data.
     - `@modelcontextprotocol/sdk`: for the `sshya mcp` stdio server.
+- **In-house replacements** (`src/lib/`, no third-party code): `color.ts`
+  (chalk 5 subset, byte-identical output), `fuzzy.ts` (Fuse.js 7 Bitap scoring
+  for alias search), and `prompts.ts` (inquirer `input`/`confirm`/`select`/
+  `search`). `chalk`, `fuse.js`, and `inquirer` remain dev-only, as references
+  for the parity tests next to each module.
 
 ## Implementation Details
 The main application logic is in `index.ts`. SSH arguments are built in-process and passed directly to your system `ssh` binary, avoiding fragile shell string parsing. `src/helpers/ssh.ts` is the single place that assembles key, port, TTY, batch-mode, keepalive, host-key, pooling, and remote-command arguments, so the CLI, JSON output, and MCP tools stay consistent.

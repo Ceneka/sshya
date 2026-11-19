@@ -144,8 +144,8 @@ export const importConnectionsPrompt = async (file: string, options: ImportOptio
                 let action: 'Skip' | 'Overwrite' = 'Skip';
 
                 if (strategy === 'ask') {
-                    const { default: inquirer } = await import('inquirer');
-                    const answer = await inquirer.prompt([
+                    const { prompt } = await import('../lib/prompts');
+                    const answer = await prompt([
                         {
                             type: 'select',
                             name: 'action',

@@ -124,15 +124,15 @@ export async function selectAlias(message: string = "Select a connection"): Prom
     try {
         // Inquirer is a heavy interactive-only dependency; load it only when a
         // human is actually about to be prompted.
-        const { default: inquirer } = await import('inquirer');
-        const { alias } = await inquirer.prompt([
+        const { prompt } = await import('../lib/prompts');
+        const { alias } = await prompt([
             {
                 type: 'search',
                 name: 'alias',
                 message,
                 // Fuzzy-search the aliases using Fuse.js as the user types.
-                // The signature matches the @inquirer/search documentation:
-                //   (term: string | void, { signal }: { signal: AbortSignal }) => Promise<Choice[]>
+                // The signature matches SearchConfig.source in src/lib/prompts.ts:
+                //   (term: string | undefined, { signal }) => Promise<ChoiceInput[]>
                 source: async (term: unknown) => {
                     // When term is undefined or empty, return the full, recently-used-sorted list.
                     if (typeof term !== 'string' || term.trim().length === 0) {
