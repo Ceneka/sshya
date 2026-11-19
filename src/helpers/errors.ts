@@ -18,6 +18,7 @@ export type SshErrorKind =
   | 'remote-command'
   | 'shell'
   | 'remote'
+  | 'invalid-path'
   | 'unknown';
 
 export interface SshFailure {

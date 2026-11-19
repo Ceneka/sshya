@@ -6,6 +6,7 @@ import { hasControlSocket, reuseEnabled } from '../helpers/control';
 import { classifySshError, spawnFailure, type SshErrorKind } from '../helpers/errors';
 import { resolveAliasForCommand, selectAlias } from '../helpers/selectAlias';
 import { buildRemoteCommandLine, buildSshArgs, type HostKeyChecking } from '../helpers/ssh';
+import { clampTimeoutMs } from '../helpers/timer';
 import { jsonEnabled, printJson } from '../output';
 
 export type OutputMode = 'inherit' | 'capture';
@@ -112,7 +113,7 @@ export const executeSshCommand = (
   const batchMode = options.batchMode ?? true;
   const reuse = reuseEnabled(options.reuse);
   const reused = reuse && hasControlSocket(connection);
-  const timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : undefined;
+  const timeoutMs = clampTimeoutMs(options.timeoutMs);
 
   const args = buildSshArgs(connection, {
     tty: options.tty,
@@ -192,7 +193,12 @@ export const executeSshCommand = (
     let activeStdinStream: NodeJS.ReadableStream | undefined;
 
     if (hasInlineStdin) {
-      child.stdin?.end(options.stdin);
+      const childStdin = child.stdin;
+      // The remote command can exit before it reads the payload (permission
+      // denied, early failure). Writing the rest then raises EPIPE; swallow it
+      // instead of crashing the CLI/MCP process with an unhandled 'error'.
+      childStdin?.on('error', () => {});
+      childStdin?.end(options.stdin);
     } else if (hasStdinStream && options.stdinStream) {
       activeStdinStream = options.stdinStream;
       const childStdin = child.stdin;

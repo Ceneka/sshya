@@ -50,6 +50,18 @@ const parseByteSizeOption = (value: string): number => {
   return bytes;
 };
 
+/**
+ * Validate `run --timeout` before the 120 s safety net is resolved. Falling
+ * through to "no timeout" on a typo would silently disable that safety net.
+ */
+const parseTimeoutSeconds = (value: string): string => {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new InvalidArgumentError('Expected a non-negative number of seconds (0 disables the timeout).');
+  }
+  return value;
+};
+
 const resolveHostKeyChecking = (options: {
   acceptNewHostKey?: boolean;
   strictHostKey?: boolean;
@@ -84,7 +96,7 @@ program
   .option('--tty', 'Allocate a remote TTY')
   .option('--allow-password', 'Allow SSH to prompt for a password (BatchMode off)')
   .option('--connect-timeout <seconds>', 'SSH ConnectTimeout in seconds', '10')
-  .option('--timeout <seconds>', 'Abort the remote command after this many seconds (0 disables the 120s default)')
+  .option('--timeout <seconds>', 'Abort the remote command after this many seconds (0 disables the 120s default)', parseTimeoutSeconds)
   .option('--no-cwd', 'Do not cd into the connection remote path first')
   .option('--no-reuse', 'Open a fresh connection instead of reusing the pooled one')
   .option('--no-stdin', 'Do not forward piped stdin to the remote command')
