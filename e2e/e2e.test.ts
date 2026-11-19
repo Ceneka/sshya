@@ -878,7 +878,18 @@ suite('local sshd end to end (SSHYA_E2E=1)', () => {
         expect(run.isError).toBe(false);
         expect(run.data.ok).toBe(true);
         expect(run.data.stdout).toBe('mcp-hello\n');
-        expect(run.data.timeoutMs).toBe(120_000);
+        // Compact by default: no echoed command/target, no counters on success.
+        expect(run.data.timeoutMs).toBeUndefined();
+        expect(run.data.command).toBeUndefined();
+
+        const verboseRun = await callToolJson<RunPayload>(session.client, 'run_command', {
+          alias: 'alpha',
+          command: "printf 'mcp-hello\\n'",
+          verbose: true,
+        });
+        expect(verboseRun.data.ok).toBe(true);
+        expect(verboseRun.data.timeoutMs).toBe(120_000);
+        expect(verboseRun.data.command).toBe("printf 'mcp-hello\\n'");
 
         const many = await callToolJson<{
           ok: boolean;

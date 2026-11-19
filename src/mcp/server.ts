@@ -15,8 +15,9 @@ import {
   type Connection,
 } from '../database';
 import { buildInteractiveSshArgs, buildSshArgs, formatShellCommand, quoteRemotePath } from '../helpers/ssh';
+import { findAliasSuggestions } from '../helpers/selectAlias';
 import { executeCopy } from '../connection/copy';
-import { executeSshCommand } from '../connection/run';
+import { executeSshCommand, type RunResult } from '../connection/run';
 import { testConnection } from '../connection/test';
 import { resolveMcpPolicy, type McpPolicy, type McpPolicyOptions } from './policy';
 
@@ -25,13 +26,17 @@ type ToolResult = {
   isError?: boolean;
 };
 
+/**
+ * MCP responses are minified: the model pays for whitespace too. Compact
+ * payloads are built before they reach this helper.
+ */
 const ok = (data: unknown, isError = false): ToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+  content: [{ type: 'text', text: JSON.stringify(data) ?? 'null' }],
   ...(isError ? { isError: true } : {}),
 });
 
-const failResult = (message: string, errorKind?: string): ToolResult =>
-  ok({ ok: false, error: message, ...(errorKind ? { errorKind } : {}) }, true);
+const failResult = (message: string, errorKind: string): ToolResult =>
+  ok({ ok: false, errorKind, error: message }, true);
 
 const aliasDenial = (policy: McpPolicy, alias: string): ToolResult =>
   failResult(
@@ -55,6 +60,106 @@ const READ_ONLY_NOTE = [
 const MCP_DEFAULT_STDOUT_BYTES = 8 * 1024;
 const MCP_DEFAULT_STDERR_BYTES = 4 * 1024;
 
+/** Fuzzy candidates are hints only: never execute against a suggestion. */
+const aliasSuggestions = (policy: McpPolicy, alias: string): string[] =>
+  findAliasSuggestions(alias, 25)
+    .filter(candidate => policy.isAliasAllowed(candidate))
+    .slice(0, 3);
+
+const aliasNotFound = (policy: McpPolicy, alias: string): ToolResult => {
+  const suggestions = aliasSuggestions(policy, alias);
+  return ok({
+    ok: false,
+    errorKind: 'alias_not_found',
+    error: `Alias not found: ${alias}`,
+    ...(suggestions.length > 0 ? { suggestions } : {}),
+  }, true);
+};
+
+/** Fields accepted by the compact run/test/copy serializer. */
+type RunLike = {
+  alias?: string;
+  ok?: boolean;
+  exitCode?: number | null;
+  error?: string;
+  errorKind?: string;
+  hint?: string;
+  suggestions?: string[];
+  stdout?: string;
+  stderr?: string;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+  stdoutLines?: number;
+  stderrLines?: number;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  timedOut?: boolean;
+  durationMs?: number;
+  timeoutMs?: number | null;
+  signal?: NodeJS.Signals | null;
+  reused?: boolean;
+  truncation?: string;
+};
+
+/**
+ * Drop echoed input, empty streams, zero counters, and false flags. Failure
+ * diagnostics (`errorKind`, `hint`, stderr) are always kept.
+ */
+export const compactRunResult = (result: RunLike): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  if (result.alias !== undefined) out.alias = result.alias;
+  out.ok = result.ok === true;
+  if (result.exitCode !== undefined) out.exitCode = result.exitCode;
+  if (result.error !== undefined) out.error = result.error;
+  if (result.errorKind !== undefined) out.errorKind = result.errorKind;
+  if (result.hint !== undefined) out.hint = result.hint;
+  if (result.suggestions !== undefined && result.suggestions.length > 0) out.suggestions = result.suggestions;
+
+  if (typeof result.stdout === 'string' && result.stdout.length > 0) out.stdout = result.stdout;
+  if (typeof result.stderr === 'string' && result.stderr.length > 0) out.stderr = result.stderr;
+
+  if (result.timedOut === true) {
+    out.timedOut = true;
+    if (result.timeoutMs !== undefined && result.timeoutMs !== null) out.timeoutMs = result.timeoutMs;
+  }
+  if (result.signal !== undefined && result.signal !== null) out.signal = result.signal;
+  if (typeof result.durationMs === 'number' && (result.durationMs > 5000 || result.timedOut === true)) {
+    out.durationMs = result.durationMs;
+  }
+
+  // Counters are only meaningful when the stream was cut; otherwise they
+  // duplicate information the model can get from stdout/stderr itself.
+  if (result.stdoutTruncated === true) {
+    out.stdoutTruncated = true;
+    if (typeof result.stdoutBytes === 'number' && result.stdoutBytes > 0) out.stdoutBytes = result.stdoutBytes;
+    if (typeof result.stdoutLines === 'number' && result.stdoutLines > 0) out.stdoutLines = result.stdoutLines;
+  }
+  if (result.stderrTruncated === true) {
+    out.stderrTruncated = true;
+    if (typeof result.stderrBytes === 'number' && result.stderrBytes > 0) out.stderrBytes = result.stderrBytes;
+    if (typeof result.stderrLines === 'number' && result.stderrLines > 0) out.stderrLines = result.stderrLines;
+  }
+
+  if (result.truncation !== undefined) out.truncation = result.truncation;
+  if (result.reused === true) out.reused = true;
+  return out;
+};
+
+const compactRun = (result: RunResult, verbose: boolean): Record<string, unknown> =>
+  verbose ? (result as unknown as Record<string, unknown>) : compactRunResult(result);
+
+const sortByLastUsed = (a: Connection, b: Connection): number =>
+  (b.lastUsed ?? 0) - (a.lastUsed ?? 0);
+
+/** List/resource shape: identity plus only the fields an agent acts on. */
+const serializeConnectionSummary = (connection: Connection): Record<string, unknown> => ({
+  alias: connection.alias,
+  target: `${connection.user}@${connection.host}${connection.port ? `:${connection.port}` : ''}`,
+  ...(connection.key_path ? { keyPath: connection.key_path } : {}),
+  ...(connection.remote_path ? { remotePath: connection.remote_path } : {}),
+  ...(connection.readonly === true ? { readonly: true } : {}),
+});
+
 const serializeConnection = (connection: Connection) => {
   const sshArgs = buildSshArgs(connection);
   return {
@@ -65,28 +170,27 @@ const serializeConnection = (connection: Connection) => {
   };
 };
 
+const listAllowedConnections = (policy: McpPolicy): Connection[] =>
+  getConnections()
+    .filter(connection => policy.isAliasAllowed(connection.alias))
+    .sort(sortByLastUsed);
+
 const registerTools = (server: McpServer, policy: McpPolicy): void => {
   server.registerTool(
     'list_connections',
     {
-      title: 'List SSH connections',
-      description: 'List stored SSH connections with alias, target, port, key path, remote path, readonly flag, and ready-to-run ssh command. Only aliases allowed by the active MCP policy are returned.',
+      description: 'List stored connections.',
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    async () => ok(
-      getConnections()
-        .filter(connection => policy.isAliasAllowed(connection.alias))
-        .map(serializeConnection),
-    ),
+    async () => ok(listAllowedConnections(policy).map(serializeConnectionSummary)),
   );
 
   server.registerTool(
     'get_connection',
     {
-      title: 'Get an SSH connection',
-      description: 'Look up one stored SSH connection by exact alias. Aliases outside the active MCP policy are refused before lookup.',
-      inputSchema: { alias: z.string().min(1).describe('Exact connection alias') },
+      description: 'Get one connection and its ssh commands.',
+      inputSchema: { alias: z.string().min(1) },
       annotations: { readOnlyHint: true },
     },
     async ({ alias }) => {
@@ -95,7 +199,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return failResult(`Alias not found: ${alias}`);
+        return aliasNotFound(policy, alias);
       }
       return ok(serializeConnection(connection));
     },
@@ -105,17 +209,16 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'add_connection',
       {
-        title: 'Add an SSH connection',
-        description: 'Store a new SSH connection. Set overwrite=true to replace an existing alias (idempotent upsert). Only aliases allowed by the active MCP policy can be created. Set readonly=true to refuse write_remote_file and copy_file uploads for this connection; pass readonly=false when overwriting to clear an existing flag.',
+        description: 'Add a connection; overwrite replaces.',
         inputSchema: {
-          alias: z.string().min(1).describe('Short name used to reference the connection'),
-          user: z.string().min(1).describe('SSH username'),
-          host: z.string().min(1).describe('Hostname or IP address'),
-          port: z.union([z.string(), z.number()]).optional().describe('SSH port'),
-          keyPath: z.string().optional().describe('Path to the private key, e.g. ~/.ssh/id_ed25519'),
-          remotePath: z.string().optional().describe('Default remote working directory'),
-          readonly: z.boolean().optional().describe('Refuse write_remote_file and copy_file uploads for this connection'),
-          overwrite: z.boolean().optional().describe('Replace the connection if the alias already exists'),
+          alias: z.string().min(1),
+          user: z.string().min(1),
+          host: z.string().min(1),
+          port: z.union([z.string(), z.number()]).optional(),
+          keyPath: z.string().optional(),
+          remotePath: z.string().optional(),
+          readonly: z.boolean().optional(),
+          overwrite: z.boolean().optional(),
         },
       },
       async ({ alias, user, host, port, keyPath, remotePath, readonly, overwrite }) => {
@@ -133,7 +236,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           readonly,
         });
         if (!parsed.success) {
-          return failResult(parsed.error.issues.map(issue => issue.message).join(', '));
+          return failResult(parsed.error.issues.map(issue => issue.message).join(', '), 'invalid_arguments');
         }
 
         const existed = Boolean(getConnectionByAlias(parsed.data.alias));
@@ -149,7 +252,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           }, overwrite === true);
           return ok({ ok: true, created: !existed, connection: serializeConnection(connection) });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err));
+          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
         }
       },
     );
@@ -157,17 +260,16 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'update_connection',
       {
-        title: 'Update an SSH connection',
-        description: 'Update fields on an existing connection. Only supplied fields change; pass an empty string for keyPath or remotePath to clear them. Renaming is refused when the new alias is outside the active MCP policy. Set readonly=false to clear the write guard.',
+        description: 'Update connection fields.',
         inputSchema: {
-          alias: z.string().min(1).describe('Exact alias of the connection to update'),
+          alias: z.string().min(1),
           user: z.string().optional(),
           host: z.string().optional(),
           port: z.union([z.string(), z.number()]).optional(),
           keyPath: z.string().optional(),
           remotePath: z.string().optional(),
-          readonly: z.boolean().optional().describe('Refuse write_remote_file and copy_file uploads for this connection'),
-          newAlias: z.string().optional().describe('Rename the connection'),
+          readonly: z.boolean().optional(),
+          newAlias: z.string().optional(),
         },
       },
       async ({ alias, user, host, port, keyPath, remotePath, readonly, newAlias }) => {
@@ -180,7 +282,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return failResult(`Alias not found: ${alias}`);
+          return aliasNotFound(policy, alias);
         }
 
         const merged = {
@@ -195,7 +297,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const parsed = connectionSchema.safeParse(merged);
         if (!parsed.success) {
-          return failResult(parsed.error.issues.map(issue => issue.message).join(', '));
+          return failResult(parsed.error.issues.map(issue => issue.message).join(', '), 'invalid_arguments');
         }
 
         try {
@@ -212,7 +314,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           const connection = getConnectionByAlias(parsed.data.alias);
           return ok({ ok: true, connection: connection ? serializeConnection(connection) : undefined });
         } catch (err) {
-          return failResult(err instanceof Error ? err.message : String(err));
+          return failResult(err instanceof Error ? err.message : String(err), 'store_error');
         }
       },
     );
@@ -220,9 +322,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'remove_connection',
       {
-        title: 'Remove an SSH connection',
-        description: 'Delete one stored connection by exact alias. Aliases outside the active MCP policy are refused.',
-        inputSchema: { alias: z.string().min(1).describe('Exact connection alias') },
+        description: 'Delete a connection.',
+        inputSchema: { alias: z.string().min(1) },
         annotations: { destructiveHint: true },
       },
       async ({ alias }) => {
@@ -231,7 +332,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         }
         const existing = getConnectionByAlias(alias);
         if (!existing) {
-          return failResult(`Alias not found: ${alias}`);
+          return aliasNotFound(policy, alias);
         }
         removeConnection(alias);
         return ok({ ok: true, removed: existing });
@@ -242,13 +343,12 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
   server.registerTool(
     'test_connection',
     {
-      title: 'Test an SSH connection',
-      description: 'Open a batched, non-interactive SSH session and run `true`. Fails fast instead of prompting for a password. By default it trusts an unknown host key once (TOFU); pass acceptNewHostKey=false to keep strict host key checking. Aliases outside the active MCP policy are refused.',
+      description: 'Check SSH connectivity.',
       inputSchema: {
-        alias: z.string().min(1).describe('Exact connection alias'),
-        timeoutMs: z.number().int().positive().optional().describe('Overall timeout in milliseconds (default 5000)'),
-        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
-        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
+        alias: z.string().min(1),
+        timeoutMs: z.number().int().positive().optional(),
+        reuse: z.boolean().optional(),
+        acceptNewHostKey: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },
     },
@@ -258,52 +358,44 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return failResult(`Alias not found: ${alias}`);
+        return aliasNotFound(policy, alias);
       }
       const result = await testConnection(connection, {
         timeoutMs: timeoutMs ?? 5000,
         reuse: reuse !== false,
         hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
       });
-      return ok(result, !result.ok);
+      return ok(compactRunResult(result), !result.ok);
     },
   );
 
   server.registerTool(
     'run_command',
     {
-      title: 'Run a command over SSH',
-      description: [
-        'Run a one-shot, non-interactive command on a stored connection and return stdout, stderr, and the exit code.',
-        'The command is interpreted by the remote login shell, so pipes, redirection, and && work; there is no persistent shell between calls.',
-        'Commands run from remotePath unless cwd=false. Each call is stateless: pass an explicit cd or use cwd.',
-        'Connections are pooled, so the first call pays the handshake and later calls are fast; pass reuse=false to force a fresh one.',
-        'Output is capped (default 8 KiB stdout as head+tail, 4 KiB stderr) and truncation is reported; narrow large logs with grep, sed -n, or tail -n, or raise maxOutputBytes.',
-        'On failure, errorKind and hint explain the likely fix. Unknown host keys are trusted once by default; set acceptNewHostKey=false for strict checking.',
-        'This tool runs arbitrary commands and remains available even in read-only mode. Aliases outside the active MCP policy are refused before any SSH process starts.',
-      ].join(' '),
+      description: 'Run a non-interactive SSH command.',
       inputSchema: {
-        alias: z.string().min(1).describe('Exact connection alias'),
-        command: z.string().min(1).describe('Command to run on the remote host (interpreted by the remote shell)'),
-        cwd: z.boolean().optional().describe('cd into the connection remotePath first (default true)'),
-        tty: z.boolean().optional().describe('Allocate a remote TTY (default false)'),
-        timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
-        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured stdout bytes (default 8192); stderr is capped at min(this, 4096). Narrow the command before raising it'),
-        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Where to cut output above the cap: "headtail" (default, first half + last half), "head", or "tail". Does not add tail -n'),
-        tail: z.boolean().optional().describe('Deprecated alias for truncate="tail"; prefer truncate'),
-        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
-        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
-        stdin: z.string().max(2 * 1024 * 1024).optional().describe('Data to pipe into the remote command'),
+        alias: z.string().min(1),
+        command: z.string().min(1),
+        cwd: z.boolean().optional(),
+        tty: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('stdout cap (default 8192)'),
+        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Which part survives (default headtail)'),
+        tail: z.boolean().optional().describe('Deprecated: truncate="tail"'),
+        reuse: z.boolean().optional(),
+        acceptNewHostKey: z.boolean().optional(),
+        stdin: z.string().max(2 * 1024 * 1024).optional().describe('Remote stdin data'),
+        verbose: z.boolean().optional().describe('Full result shape'),
       },
     },
-    async ({ alias, command, cwd, tty, timeoutMs, maxOutputBytes, truncate, tail, reuse, acceptNewHostKey, stdin }) => {
+    async ({ alias, command, cwd, tty, timeoutMs, maxOutputBytes, truncate, tail, reuse, acceptNewHostKey, stdin, verbose }) => {
       if (!policy.isAliasAllowed(alias)) {
         return aliasDenial(policy, alias);
       }
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return failResult(`Alias not found: ${alias}`);
+        return aliasNotFound(policy, alias);
       }
 
       recordConnectionUsage(alias);
@@ -321,35 +413,51 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         stdin,
       });
 
-      return ok(result, !result.ok);
+      return ok(compactRun(result, verbose === true), !result.ok);
     },
   );
 
   server.registerTool(
     'run_on_many',
     {
-      title: 'Run a command on several connections',
-      description: [
-        'Fan out one non-interactive command to several stored connections in a single call (max 50 aliases, default concurrency 4).',
-        'Results keep the input order and include stdout, stderr, exit code, truncation flags, errorKind, and hint. Output is capped per host like run_command (8 KiB stdout head+tail, 4 KiB stderr by default).',
-        'Use this for fleet checks instead of one run_command call per host.',
-        'Every alias must be allowed by the active MCP policy; otherwise the whole call is refused before any SSH process starts.',
-        'This tool runs arbitrary commands and remains available even in read-only mode.',
-      ].join(' '),
+      description: 'Run a command on several hosts.',
       inputSchema: {
-        aliases: z.array(z.string().min(1)).min(1).max(50).describe('Aliases to target'),
-        command: z.string().min(1).describe('Command to run on every host'),
-        cwd: z.boolean().optional().describe('cd into each connection remotePath first (default true)'),
-        timeoutMs: z.number().int().positive().optional().describe('Per-host timeout in milliseconds (default 120000)'),
-        concurrency: z.number().int().min(1).max(16).optional().describe('Parallel hosts (default 4)'),
-        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('Cap captured stdout bytes per host (default 8192); stderr is capped at min(this, 4096)'),
-        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Where to cut output above the cap: "headtail" (default), "head", or "tail"'),
-        tail: z.boolean().optional().describe('Deprecated alias for truncate="tail"; prefer truncate'),
-        acceptNewHostKey: z.boolean().optional().describe('Trust unknown host keys on first contact (default true)'),
-        failFast: z.boolean().optional().describe('Stop scheduling new hosts after the first failure'),
+        aliases: z.array(z.string().min(1)).min(1).max(50),
+        command: z.string().min(1),
+        cwd: z.boolean().optional(),
+        tty: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        concurrency: z.number().int().min(1).max(16).optional().describe('Parallel hosts'),
+        maxOutputBytes: z.number().int().positive().max(4 * 1024 * 1024).optional().describe('stdout cap per host (default 8192)'),
+        truncate: z.enum(['head', 'tail', 'headtail']).optional().describe('Which part survives (default headtail)'),
+        tail: z.boolean().optional().describe('Deprecated: truncate="tail"'),
+        reuse: z.boolean().optional(),
+        acceptNewHostKey: z.boolean().optional(),
+        stdin: z.string().max(2 * 1024 * 1024).optional().describe('Remote stdin data'),
+        failFast: z.boolean().optional(),
+        only: z.enum(['all', 'failures']).optional().describe('all or failures'),
+        match: z.string().min(1).optional().describe('Regex on stdout lines'),
+        verbose: z.boolean().optional().describe('Full result shape'),
       },
     },
-    async ({ aliases, command, cwd, timeoutMs, concurrency, maxOutputBytes, truncate, tail, acceptNewHostKey, failFast }) => {
+    async ({
+      aliases,
+      command,
+      cwd,
+      tty,
+      timeoutMs,
+      concurrency,
+      maxOutputBytes,
+      truncate,
+      tail,
+      reuse,
+      acceptNewHostKey,
+      stdin,
+      failFast,
+      only,
+      match,
+      verbose,
+    }) => {
       const uniqueAliases = [...new Set(aliases)];
       const deniedAlias = uniqueAliases.find(alias => !policy.isAliasAllowed(alias));
       if (deniedAlias !== undefined) {
@@ -358,7 +466,19 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const stdoutMaxBytes = maxOutputBytes ?? MCP_DEFAULT_STDOUT_BYTES;
       const outputMode = truncate ?? (tail === true ? 'tail' : 'headtail');
-      const results = new Array<unknown>(uniqueAliases.length);
+      let matcher: RegExp | undefined;
+      if (match !== undefined) {
+        try {
+          matcher = new RegExp(match);
+        } catch (error) {
+          return failResult(
+            `Invalid match regex: ${error instanceof Error ? error.message : String(error)}`,
+            'invalid_arguments',
+          );
+        }
+      }
+
+      const results = new Array<RunLike>(uniqueAliases.length);
       let cursor = 0;
       let stop = false;
 
@@ -370,7 +490,14 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           const connection = getConnectionByAlias(alias);
 
           if (!connection) {
-            results[index] = { ok: false, alias, error: `Alias not found: ${alias}` };
+            const suggestions = aliasSuggestions(policy, alias);
+            results[index] = {
+              ok: false,
+              alias,
+              errorKind: 'alias_not_found',
+              error: `Alias not found: ${alias}`,
+              ...(suggestions.length > 0 ? { suggestions } : {}),
+            };
             if (failFast) {
               stop = true;
             }
@@ -380,13 +507,15 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           recordConnectionUsage(alias);
           const result = await executeSshCommand(connection, command, {
             batchMode: true,
+            tty: tty === true,
             cwd: cwd !== false,
             timeoutMs: timeoutMs ?? 120000,
             maxOutputBytes: stdoutMaxBytes,
             stderrMaxOutputBytes: Math.min(stdoutMaxBytes, MCP_DEFAULT_STDERR_BYTES),
             outputMode,
-            reuse: true,
+            reuse: reuse !== false,
             hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
+            stdin,
           });
           results[index] = result;
           if (!result.ok && failFast) {
@@ -404,21 +533,45 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           results[index] = {
             ok: false,
             alias: uniqueAliases[index],
+            errorKind: 'skipped',
             error: 'Skipped because failFast stopped the batch',
           };
         }
       }
 
-      const settled = results as Array<{ ok: boolean }>;
-      const succeeded = settled.filter(result => result.ok).length;
+      const succeeded = results.filter(result => result.ok === true).length;
       const summary = {
         total: uniqueAliases.length,
         succeeded,
         failed: uniqueAliases.length - succeeded,
       };
 
+      const visible: RunLike[] = [];
+      for (const result of results) {
+        if (only === 'failures' && result.ok === true) {
+          continue;
+        }
+        if (matcher) {
+          const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+          if (stdout.length === 0) {
+            continue;
+          }
+          const matchingLines = stdout.split('\n').filter(line => matcher!.test(line));
+          if (matchingLines.length === 0) {
+            continue;
+          }
+          visible.push({ ...result, stdout: matchingLines.join('\n') });
+          continue;
+        }
+        visible.push(result);
+      }
+
       return ok(
-        { ok: summary.failed === 0, summary, results },
+        {
+          ok: summary.failed === 0,
+          summary,
+          results: verbose === true ? visible : visible.map(result => compactRunResult(result)),
+        },
         summary.failed > 0,
       );
     },
@@ -428,24 +581,17 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'write_remote_file',
       {
-        title: 'Write a remote file',
-        description: [
-          'Write a file on a stored connection by piping bytes through SSH (no scp temp file).',
-          'Content is UTF-8 by default; set encoding=base64 for binary data. Paths are relative to remotePath unless absolute.',
-          'Pass append=true to append, createParents=true to mkdir -p first, and mode to chmod afterwards.',
-          'The write is not atomic: a failed transfer can leave a partial file. Use run_command with a temporary path when that matters.',
-          'Refused when the connection is marked readonly or the alias is outside the active MCP policy.',
-        ].join(' '),
+        description: 'Write a remote file; not atomic.',
         inputSchema: {
-          alias: z.string().min(1).describe('Exact connection alias'),
-          path: z.string().min(1).describe('Remote path (absolute, or relative to remotePath)'),
-          content: z.string().max(2 * 1024 * 1024).describe('File contents (UTF-8 text, or base64 when encoding=base64)'),
-          encoding: z.enum(['utf8', 'base64']).optional().describe('How to decode content (default utf8)'),
-          append: z.boolean().optional().describe('Append instead of truncating (default false)'),
-          createParents: z.boolean().optional().describe('Run mkdir -p on the parent directory first'),
-          mode: z.string().regex(/^[0-7]{3,4}$/).optional().describe('chmod mode such as 600 or 0644'),
-          timeoutMs: z.number().int().positive().optional().describe('Abort after this many milliseconds (default 120000)'),
-          acceptNewHostKey: z.boolean().optional().describe('Trust an unknown host key on first contact (default true)'),
+          alias: z.string().min(1),
+          path: z.string().min(1),
+          content: z.string().max(2 * 1024 * 1024),
+          encoding: z.enum(['utf8', 'base64']).optional(),
+          append: z.boolean().optional(),
+          createParents: z.boolean().optional(),
+          mode: z.string().regex(/^[0-7]{3,4}$/).optional(),
+          timeoutMs: z.number().int().positive().optional(),
+          acceptNewHostKey: z.boolean().optional(),
         },
       },
       async ({ alias, path: remotePath, content, encoding, append, createParents, mode, timeoutMs, acceptNewHostKey }) => {
@@ -455,7 +601,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
         const connection = getConnectionByAlias(alias);
         if (!connection) {
-          return failResult(`Alias not found: ${alias}`);
+          return aliasNotFound(policy, alias);
         }
         if (connection.readonly === true) {
           return readonlyConnectionDenial(alias, 'write_remote_file calls');
@@ -465,7 +611,10 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         try {
           data = Buffer.from(content, encoding === 'base64' ? 'base64' : 'utf8');
         } catch (error) {
-          return failResult(`Invalid ${encoding ?? 'utf8'} content: ${error instanceof Error ? error.message : String(error)}`);
+          return failResult(
+            `Invalid ${encoding ?? 'utf8'} content: ${error instanceof Error ? error.message : String(error)}`,
+            'invalid_arguments',
+          );
         }
 
         const quotedPath = quoteRemotePath(remotePath);
@@ -497,12 +646,19 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             ok: result.ok,
             alias,
             path: remotePath,
-            bytesWritten: result.ok ? data.byteLength : 0,
-            encoding: encoding ?? 'utf8',
-            appended: append === true,
-            reused: result.reused,
-            durationMs: result.durationMs,
-            ...(result.ok ? {} : { errorKind: result.errorKind, hint: result.hint, stderr: result.stderr }),
+            ...(result.ok ? { bytesWritten: data.byteLength } : {}),
+            ...(encoding === 'base64' ? { encoding } : {}),
+            ...(append === true ? { appended: true } : {}),
+            ...(result.reused ? { reused: true } : {}),
+            ...(result.durationMs > 5000 ? { durationMs: result.durationMs } : {}),
+            ...(result.ok
+              ? {}
+              : {
+                exitCode: result.exitCode,
+                errorKind: result.errorKind ?? 'unknown',
+                hint: result.hint,
+                stderr: result.stderr || undefined,
+              }),
           },
           !result.ok,
         );
@@ -513,27 +669,19 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
   server.registerTool(
     'copy_file',
     {
-      title: 'Copy a file over SCP',
-      description: [
-        policy.readOnly
-          ? 'Download a file or directory using a stored connection. This MCP server is read-only, so direction must be "download"; uploads are refused.'
-          : 'Upload or download a file or directory using a stored connection. Connections marked readonly refuse uploads.',
-        'Unknown host keys are trusted once by default (TOFU); set acceptNewHostKey=false for strict checking.',
-        'Connections are pooled when possible.',
-        'Aliases outside the active MCP policy are refused.',
-      ].join(' '),
+      description: policy.readOnly
+        ? 'Download with scp; uploads are refused.'
+        : 'Copy files with scp.',
       inputSchema: {
-        alias: z.string().min(1).describe('Exact connection alias'),
+        alias: z.string().min(1),
         source: z.string().min(1),
         destination: z.string().min(1),
-        direction: z.enum(['upload', 'download']).describe(policy.readOnly
-          ? 'Read-only server: only "download" is accepted'
-          : 'upload = local to remote, download = remote to local'),
+        direction: z.enum(['upload', 'download']).describe('upload or download'),
         recursive: z.boolean().optional(),
         preserve: z.boolean().optional(),
         timeoutMs: z.number().int().positive().optional(),
-        reuse: z.boolean().optional().describe('Reuse a pooled connection when available (default true)'),
-        acceptNewHostKey: z.boolean().optional().describe('Trust a previously unknown host key on first contact (default true)'),
+        reuse: z.boolean().optional(),
+        acceptNewHostKey: z.boolean().optional(),
       },
     },
     async ({ alias, source, destination, direction, recursive, preserve, timeoutMs, reuse, acceptNewHostKey }) => {
@@ -549,7 +697,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
 
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return failResult(`Alias not found: ${alias}`);
+        return aliasNotFound(policy, alias);
       }
       if (connection.readonly === true && direction === 'upload') {
         return readonlyConnectionDenial(alias, 'copy_file uploads');
@@ -565,18 +713,17 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
         hostKeyChecking: acceptNewHostKey === false ? undefined : 'accept-new',
       });
 
-      return ok(result, !result.ok);
+      return ok(compactRunResult(result), !result.ok);
     },
   );
 
   server.registerTool(
     'print_ssh_command',
     {
-      title: 'Print an SSH command',
-      description: 'Return the ssh argv and a copy-pasteable command for a connection. interactive=false (default) is suitable for running remote commands; interactive=true opens the saved shell session. Aliases outside the active MCP policy are refused.',
+      description: 'Print an ssh command line.',
       inputSchema: {
-        alias: z.string().min(1).describe('Exact connection alias'),
-        interactive: z.boolean().optional().describe('Return the interactive login command instead of the non-interactive one'),
+        alias: z.string().min(1),
+        interactive: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },
     },
@@ -586,7 +733,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
       }
       const connection = getConnectionByAlias(alias);
       if (!connection) {
-        return failResult(`Alias not found: ${alias}`);
+        return aliasNotFound(policy, alias);
       }
       const args = interactive ? buildInteractiveSshArgs(connection) : buildSshArgs(connection);
       return ok({
@@ -601,8 +748,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     server.registerTool(
       'import_connections',
       {
-        title: 'Import SSH connections',
-        description: 'Bulk-store connections from an array. Existing aliases are skipped unless overwrite=true. Aliases outside the active MCP policy are refused per entry. Entries may set readonly=true to refuse write_remote_file and copy_file uploads for that connection.',
+        description: 'Import connections.',
         inputSchema: {
           connections: z.array(z.object({
             alias: z.string().min(1),
@@ -612,8 +758,8 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             keyPath: z.string().optional(),
             remotePath: z.string().optional(),
             readonly: z.boolean().optional(),
-          })).describe('Connections to import'),
-          overwrite: z.boolean().optional().describe('Replace connections whose alias already exists'),
+          })),
+          overwrite: z.boolean().optional(),
         },
       },
       async ({ connections, overwrite }) => {
@@ -638,6 +784,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             invalid.push({
               connection: candidate,
               error: parsed.error.issues.map(issue => issue.message).join(', '),
+              errorKind: 'invalid_arguments',
             });
             continue;
           }
@@ -670,6 +817,7 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
             invalid.push({
               connection: candidate,
               error: err instanceof Error ? err.message : String(err),
+              errorKind: 'store_error',
             });
           }
         }
@@ -694,20 +842,14 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
     'sshya://connections',
     {
       title: 'SSH connections',
-      description: 'Stored SSH connections as JSON, filtered to the aliases allowed by the active MCP policy.',
+      description: 'Stored SSH connections as JSON, filtered to the active policy.',
       mimeType: 'application/json',
     },
     async (uri) => ({
       contents: [{
         uri: uri.href,
         mimeType: 'application/json',
-        text: JSON.stringify(
-          getConnections()
-            .filter(connection => policy.isAliasAllowed(connection.alias))
-            .map(serializeConnection),
-          null,
-          2,
-        ),
+        text: JSON.stringify(listAllowedConnections(policy).map(serializeConnectionSummary)),
       }],
     }),
   );
@@ -743,17 +885,23 @@ const registerTools = (server: McpServer, policy: McpPolicy): void => {
           '## Mental model',
           '- Each `run_command` is an independent, non-interactive shell. There is no live shell between calls: `cd` and exports do not persist.',
           '- Pass `cwd: true` (the default) to start in the stored `remote_path`, or include `cd /path && ...` in the command.',
-          '- Connections are pooled with OpenSSH ControlMaster. The first call pays the handshake; later calls usually attach to a warm session (`reused: true`).',
+          '- Connections are pooled with OpenSSH ControlMaster. The first call pays the handshake; later calls usually attach to a warm session (`reused: true`). Pass `reuse: false` to force a fresh connection.',
           '- `BatchMode=yes`, `-T`, and a connect timeout are always on. Password prompts fail instead of hanging.',
           '',
+          '## Responses',
+          '- Results are compact by default: echoed input (`command`, `remoteCommand`, `target`, `cwd`), empty streams, zero counters, and false flags are omitted. Pass `verbose: true` to `run_command` or `run_on_many` for the full shape.',
+          '- `list_connections` and `sshya://connections` return only `alias`, `target`, and non-empty `keyPath`/`remotePath`/`readonly`, most recently used first. Use `get_connection` or `print_ssh_command` for ssh args and commands.',
+          '- `run_on_many` always returns `{total, succeeded, failed}`; use `only: "failures"` or `match` (regex on stdout, matching lines only) to shrink fleet replies.',
+          '- `ok` is true only when every host exited 0 and did not time out.',
+          '',
           '## Output',
-          '- stdout and stderr are capped per stream. Defaults: 8 KiB stdout kept as head+tail (first half + last half) and 4 KiB stderr. Every result reports `stdoutBytes`, `stderrBytes`, and `*Truncated`; when anything was cut it also includes `truncation` (`head`, `tail`, or `headtail`).',
-          '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which end survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
-          '- `ok` is true only when the remote exit code is 0 and the command did not time out.',
+          '- stdout and stderr are capped per stream. Defaults: 8 KiB stdout kept as head+tail (first half + last half) and 4 KiB stderr. Byte/line counters, `*Truncated`, and `truncation` (`head`|`tail`|`headtail`) are reported only when a stream was cut.',
+          '- To see more, narrow the command first: `grep`, `sed -n "200,240p"`, or `| tail -n 100`. `truncate` only chooses which part survives; it does not add `tail -n`. Raise `maxOutputBytes` when the extra output is genuinely needed.',
           '',
           '## Failure handling',
-          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `invalid-path`, `unknown`, `ssh-missing`, plus policy kinds `alias_not_allowed`, `read_only`, and `connection_readonly`.',
-          '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` for sudo.',
+          '- `errorKind` is stable: `host-key`, `host-key-changed`, `dns`, `refused`, `timeout`, `auth`, `key`, `network`, `remote-permission`, `remote-command`, `shell`, `tty`, `sudo_password`, `invalid-path`, `unknown`, `ssh-missing`, plus `alias_not_found`, `invalid_arguments`, `skipped`, `store_error`, `alias_not_allowed`, `read_only`, and `connection_readonly`.',
+          '- An unknown alias returns `errorKind: "alias_not_found"` with up to three `suggestions`; fix the alias and retry, never execute against a suggestion automatically.',
+          '- Read `hint` before retrying. Common fixes: `acceptNewHostKey: true` for first contact, a corrected `keyPath`, a different port, or `tty: true` when sudo needs a terminal. Prefer passwordless `sudo -n` for agents.',
           '- `test_connection` is a cheap `true` probe. `run_on_many` checks a fleet in one call.',
           '',
           '## Files',
@@ -782,20 +930,13 @@ export const createMcpServer = (options: McpServerOptions = {}): McpServer => {
     },
     {
       instructions: [
-        'Manage and use stored SSH connections.',
+        'SSH connection manager: call list_connections, then run_command or run_on_many.',
+        'Read the sshya://guide resource before the first command for output caps, pooling, truncation advice, and error handling.',
         policy.inlineSummary(),
         ...(policy.readOnly ? [READ_ONLY_NOTE] : []),
         ...(policy.hasAliasAllowlist
-          ? ['Tools that target an alias outside the allowlist return errorKind "alias_not_allowed"; list_connections and sshya://connections are filtered to the allowlist.']
+          ? ['Aliases outside the allowlist are refused with errorKind "alias_not_allowed"; listings are filtered.']
           : []),
-        'Call list_connections to discover aliases before running commands.',
-        'run_command is a one-shot non-interactive shell; state does not persist between calls. Set cwd or include cd in the command.',
-        'Connections are pooled, so repeated calls reuse a warm SSH session; pass reuse=false to force a fresh one.',
-        'Output is capped (8 KiB stdout as head+tail, 4 KiB stderr by default) and reports truncation; narrow large output with grep/sed -n/tail -n, or raise maxOutputBytes.',
-        'On failure read errorKind and hint before retrying; unknown host keys are trusted once by default (acceptNewHostKey=false disables that).',
-        'Use run_on_many for fleet checks, copy_file for transfers, and write_remote_file for small config writes.',
-        'Connections flagged readonly refuse write_remote_file and copy_file uploads.',
-        'Read the sshya://guide resource for conventions and examples.',
       ].join(' '),
     },
   );

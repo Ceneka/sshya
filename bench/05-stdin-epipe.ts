@@ -94,8 +94,12 @@ const main = async () => {
       + String(row.elapsedMs).padStart(6),
     );
   }
-  console.log('\nFinding: with a non-draining ssh, the tool returns a result and then the process');
-  console.log('dies with EPIPE (exit 1). Draining stdin is the control and exits cleanly.');
+  const epipeCases = cases.filter(row => row.epipe || !row.cleanExit);
+  console.log(
+    epipeCases.length === 0
+      ? '\nFinding: no EPIPE or crash in any case; child stdin errors are handled.'
+      : `\nFinding: ${epipeCases.length} case(s) crashed or reported EPIPE; the process died after the tool returned.`,
+  );
   console.log(`Payload: ${fmt(size)} bytes.`);
   console.log(`\nwrote ${file}`);
 };

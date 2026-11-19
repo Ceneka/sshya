@@ -480,7 +480,136 @@ reading lines 200–240 becomes a discoverable, binary-safe call. A
 
 ---
 
-## 6. Caveats
+## 6. After round 2 (compaction)
+
+Measured on the same machine, tokenizer, and harness after implementing
+recommendations 2, 4, 5, 6, and 7: compact/minified MCP responses, lean
+`list_connections`/`sshya://connections`, `run_on_many` filters and param
+parity, actionable alias/sudo errors, and dieted tool descriptions with details
+moved to `sshya://guide`. Re-run `bench/run-all.sh`; the tables below come from
+`results/fixed-cost.json`, `results/call-cost.json`, and
+`results/ergonomics.json`. No remote host was contacted.
+
+### Fixed context
+
+| Component | Before chars | Before tok | After chars | After tok | Change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `initialize.instructions` | 727 | **146** | 253 | **53** | −63.7% |
+| `tools/list` (12 definitions) | 11,566 | **2,592** | 6,648 | **1,595** | **−38.5%** |
+| Always-on total (instructions + tools) | 12,293 | **2,738** | 6,901 | **1,648** | **−39.8%** |
+| `resources/list` (names only) | 344 | 76 | 400 | 86 | +13.2% |
+| `sshya://guide` (on demand) | 1,734 | 454 | 3,568 | 881 | +94.1% |
+| Instructions + tools + guide | 14,027 | **3,192** | 10,469 | **2,529** | **−20.8%** |
+
+`tools/list` is now 1,595 tok, under the 1,800 target. The guide grew by 427 tok
+because TOFU, pooling, statelessness, compact-response rules, and truncation
+advice moved out of the always-on schemas; the always-on saving (1,090 tok)
+pays for it more than twice, and the guide is only read on demand.
+
+Biggest per-tool reductions: `run_command` 464 → 202 tok, `write_remote_file`
+385 → 173, `run_on_many` 345 → 285 (it gained six params: `tty`, `stdin`, `reuse`,
+`only`, `match`, and `verbose` — see below), `copy_file` 249 → 163,
+`test_connection` 209 → 106. Titles were dropped (50 tok) and parameter prose
+went from 423 → 42 tok.
+
+### Per-call responses
+
+Compact/minified values are now the real response, not a projection.
+
+| Scenario | Before tok | After tok | Saving |
+| --- | ---: | ---: | ---: |
+| `run_command` — `uptime`, tiny stdout | 195 | **59** | 69.7% |
+| `run_command` — 64 KiB log, **default cap** | 22,710 | 22,577 | 0.6% |
+| `run_command` — same log, cap 16 KiB | 5,856 | 5,723 | 2.3% |
+| `run_command` — same log, cap 8 KiB | 3,029 | 2,896 | 4.4% |
+| `run_on_many` — 10 hosts, 1 failure | 1,897 | **440** | **76.8%** |
+| `test_connection` — success | 52 | **15** | 71.2% |
+| `run_command` — auth failure | 249 | 120 | 51.8% |
+| `run_command` — host-key failure | 259 | 120 | 53.7% |
+| `run_command` — timeout | 241 | 133 | 44.8% |
+| `list_connections` — 5 | 1,356 | **183** | **86.5%** |
+| `list_connections` — 50 | 13,506 | **1,803** | **86.7%** |
+| `get_connection` — 1 | 276 | 227 | 17.8% |
+| `write_remote_file` — success | 64 | **23** | 64.1% |
+| `run_command` — alias not found | 19 | 20 | −5.3% |
+
+Across all scenarios: 49,709 → **34,339 tok** (−30.9%). The aggregate is still
+dominated by the unavoidable 64 KiB log body. Excluding the three log-payload
+scenarios, metadata goes from **18,114 → 3,143 tok (−82.6%)**, against the
+report's 2,702-tok compact projection. The remaining gap is deliberate:
+`alias` and `exitCode` are always kept, `get_connection` stays detailed (227
+tok), and the compact `list_connections` row is 36 tok/connection versus 34 in
+the projection.
+
+`get_connection` is the only response that did not shrink materially: it is the
+escape hatch that still returns `sshArgs`, `sshCommand`, and
+`interactiveSshCommand`. `print_ssh_command` covers the same need in 79 tok of
+tool context instead of 227 tok per lookup.
+
+The alias-not-found response is flat in tokens (19 → 20) but now carries
+`errorKind: "alias_not_found"` and up to three fuzzy `suggestions`, which
+removes the follow-up `list_connections` call: typo recovery went from 2,730 tok
+across two calls to **397 tok** in the ergonomics run (−85.5%), and one call
+fewer. No suggestion is ever executed automatically.
+
+### `run_on_many` filters (measured, same harness)
+
+| Query | All results | `only: "failures"` | `match` |
+| --- | ---: | ---: | ---: |
+| 10 hosts, one `7` among `0`s | 214 tok | 23 tok (none failed) | **42 tok** (`match: "[1-9]"`, one host, 126 chars) |
+| 50 hosts, all `active` | 974 tok | **23 tok** | — |
+
+The summary `{total, succeeded, failed}` is always present, so filtered calls
+stay self-describing. Before this change the 10-host error hunt cost 1,814 tok;
+the matched reply is 42 tok (−97.7%), and the 50-host fleet check drops from
+8,294 tok to 23 tok (−99.7%) when nothing failed.
+
+### Agent tasks after round 2
+
+| Task | Before total tok | After total tok | Saving |
+| --- | ---: | ---: | ---: |
+| Check disk on 5 hosts (discover + fan out) | 2,315 | 407 | 82.4% |
+| Tail a log (last 50 lines) | 5,476 | 5,318 | 2.9% |
+| Edit one line in a 20 KiB config | 12,322 | 11,990 | 2.7% |
+| Restart a service and verify | 173 | 20 | 88.4% |
+| Find which of 10 hosts has an error | 1,814 | 214 | 88.2% |
+| Read lines 200–240 of a log | 4,525 | 4,363 | 3.6% |
+| Recover from a typo in an alias | 2,730 | 397 | 85.5% |
+| Fleet check (50 hosts, one word each) | 8,294 | 974 | 88.3% |
+| **Total** | **37,649** | **23,683** | **37.1%** |
+
+The remaining large tasks are payload-bound (tail, range read) or capability
+gaps (no `read_remote_file`/edit tool), which round 2 did not target. Sudo
+failures now classify as `tty` with a `tty: true`/`sudo -n` hint instead of
+`unknown` with a CLI-only hint.
+
+### Latency
+
+No regression; the smaller payloads mostly remove serialization work. Medians
+from the same run: `list_connections` (50) 0.38 → **0.12 ms** (p95 0.43 →
+0.14), `run_command` (10 connections, cold) 2.12 → 2.07 ms, `run_command`
+(64 KiB stdout) 1.92 → 1.98 ms, `run_on_many` (10 hosts) 8.83 → 8.43 ms.
+Everything is still bounded by process spawn (~1.9 ms floor), and run-to-run
+variance is larger than these deltas.
+
+The rerun also confirms the round-1 EPIPE fix: all four
+`results/stdin-epipe.json` cases now exit 0 with no EPIPE, including a
+non-draining fake ssh and a 256 KiB payload.
+
+### What this round did not change
+
+- The default output cap and head-only truncation are still in place, so one
+  forgotten `| tail -n` still costs ~22.6k tok. That is the largest single
+  remaining lever (recommendation 3).
+- Text content remains the only copy: `resultKeys: ["content"]`,
+  `hasStructuredContent: false`. No `outputSchema` was added, so no payload is
+  duplicated.
+- `run_on_many` still executes on every requested host; `match` and
+  `only: "failures"` filter the reply, they do not skip work.
+
+---
+
+## 7. Caveats
 
 - **Fake ssh, no network.** Latency is local overhead only. Pooled vs cold RTT
   was not measured because no local sshd was available; `reused:true` was
@@ -502,7 +631,7 @@ reading lines 200–240 becomes a discoverable, binary-safe call. A
 
 ---
 
-## 7. Reproduce
+## 8. Reproduce
 
 ```bash
 cd bench

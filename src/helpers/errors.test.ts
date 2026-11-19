@@ -46,4 +46,34 @@ describe('classifySshError', () => {
     expect(classifySshError('bash: line 1: htop: command not found', { exitCode: 127 })?.kind)
       .toBe('remote-command');
   });
+
+  test('classifies sudo tty requirements with an MCP-friendly hint', () => {
+    const terminal = classifySshError(
+      'sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper',
+      { exitCode: 1 },
+    );
+    expect(terminal?.kind).toBe('tty');
+    expect(terminal?.hint).toContain('tty: true');
+    expect(terminal?.hint).toContain('sudo -n');
+
+    const noTty = classifySshError(
+      'sudo: no tty present and no askpass program specified',
+      { exitCode: 1 },
+    );
+    expect(noTty?.kind).toBe('tty');
+  });
+
+  test('classifies sudo password prompts apart from tty failures', () => {
+    const password = classifySshError('sudo: a password is required', { exitCode: 1 });
+    expect(password?.kind).toBe('sudo_password');
+    expect(password?.hint).toContain('sudo -n');
+    expect(password?.hint).toContain('NOPASSWD');
+  });
+
+  test('does not leave CLI-only flags in generic hints', () => {
+    const unknown = classifySshError('something unexpected', { exitCode: 1 });
+    expect(unknown?.kind).toBe('unknown');
+    expect(unknown?.hint).toContain('timeoutMs');
+    expect(unknown?.hint).toContain('--timeout');
+  });
 });

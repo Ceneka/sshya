@@ -17,6 +17,8 @@ export type SshErrorKind =
   | 'remote-permission'
   | 'remote-command'
   | 'shell'
+  | 'tty'
+  | 'sudo_password'
   | 'remote'
   | 'invalid-path'
   | 'unknown';
@@ -68,7 +70,7 @@ const rules: Rule[] = [
   {
     kind: 'timeout',
     pattern: /Connection timed out|Operation timed out|connect to host .+ timed out|No route to host|Network is unreachable/i,
-    hint: 'The host did not answer. Check the VPN/firewall and the stored host/port. `--connect-timeout` controls only the TCP handshake.',
+    hint: 'The host did not answer. Check the VPN/firewall and the stored host/port. The SSH connect timeout only covers the TCP handshake.',
     retryable: true,
   },
   {
@@ -80,7 +82,7 @@ const rules: Rule[] = [
   {
     kind: 'auth',
     pattern: /Permission denied \((?:publickey|password|keyboard-interactive|gssapi)/i,
-    hint: 'Authentication failed. Verify the username, the key path, and that the public key is in the remote `~/.ssh/authorized_keys`. Try `sshya show <alias>` to inspect the stored target.',
+    hint: 'Authentication failed. Verify the username, the key path, and that the public key is in the remote `~/.ssh/authorized_keys`. Inspect the target with `get_connection` (MCP) or `sshya show <alias>` (CLI).',
     retryable: false,
   },
   {
@@ -102,15 +104,27 @@ const rules: Rule[] = [
     retryable: true,
   },
   {
+    kind: 'tty',
+    pattern: /sudo: a terminal is required|sudo: no tty present|must have a tty to run sudo/i,
+    hint: 'sudo needs a terminal here. Retry with `tty: true`, or use `sudo -n` with passwordless sudo so an agent never waits on a prompt.',
+    retryable: true,
+  },
+  {
+    kind: 'sudo_password',
+    pattern: /sudo: a password is required/i,
+    hint: 'sudo asked for a password. Configure passwordless sudo (NOPASSWD) for this command or use `sudo -n`; an MCP agent cannot answer an interactive prompt.',
+    retryable: false,
+  },
+  {
     kind: 'shell',
-    pattern: /This account is currently not available|You must have a tty to run sudo/i,
-    hint: 'The remote account has no usable login shell (for example `/usr/sbin/nologin`), or the command needs a TTY. Use an account with a shell, or pass `tty: true` for sudo-style commands.',
+    pattern: /This account is currently not available/i,
+    hint: 'The remote account has no usable login shell (for example `/usr/sbin/nologin`). Use an account with a shell, or pass `tty: true` if the command needs a terminal.',
     retryable: false,
   },
   {
     kind: 'remote-command',
     pattern: /command not found|not found: .+|: not found$/im,
-    hint: 'The remote shell could not find the command. Check the remote PATH or install it; `sshya run` does not load your local PATH.',
+    hint: 'The remote shell could not find the command. Check the remote PATH or install it; the non-interactive shell does not use your local PATH.',
     retryable: false,
   },
   {
@@ -141,7 +155,7 @@ export const classifySshError = (
     const seconds = options.timeoutMs ? Math.round(options.timeoutMs / 1000) : undefined;
     return {
       kind: 'timeout',
-      hint: `The command was aborted by sshya${seconds ? ` after ${seconds}s` : ''}. Raise --timeout or run a narrower command (for example, add \`| tail -n 50\`).`,
+      hint: `The command was aborted by sshya${seconds ? ` after ${seconds}s` : ''}. Raise \`timeoutMs\` (MCP) or \`--timeout\` (CLI), or run a narrower command (for example, add \`| tail -n 50\`).`,
       retryable: true,
     };
   }
@@ -174,7 +188,7 @@ export const classifySshError = (
 
   return {
     kind: 'unknown',
-    hint: 'The SSH client or remote command failed. Inspect stderr; add `--timeout`/`--no-cwd` or run `sshya doctor --probe` to isolate the cause.',
+    hint: 'The SSH client or remote command failed. Inspect stderr; retry with a larger `timeoutMs` (MCP) or `--timeout` (CLI), and run `sshya doctor --probe` locally to isolate the cause.',
     retryable: false,
   };
 };
