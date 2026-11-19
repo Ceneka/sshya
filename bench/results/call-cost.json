@@ -1,0 +1,539 @@
+{
+  "tokenizer": "gpt-tokenizer 3.x o200k_base (cl100k_base for reference)",
+  "scenarios": [
+    {
+      "name": "run_command: uptime (tiny)",
+      "calls": 1,
+      "rawWireChars": 637,
+      "textChars": 491,
+      "textTokens": 195,
+      "minifiedChars": 414,
+      "minifiedTokens": 144,
+      "compactChars": 94,
+      "compactTokens": 49,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 103
+    },
+    {
+      "name": "run_command: 64KiB log, cap 64KiB",
+      "calls": 1,
+      "rawWireChars": 70452,
+      "textChars": 67549,
+      "textTokens": 22710,
+      "minifiedChars": 67472,
+      "minifiedTokens": 22659,
+      "compactChars": 67178,
+      "compactTokens": 22571,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 332
+    },
+    {
+      "name": "run_command: 64KiB log, cap 16KiB",
+      "calls": 1,
+      "rawWireChars": 18120,
+      "textChars": 17284,
+      "textTokens": 5856,
+      "minifiedChars": 17207,
+      "minifiedTokens": 5805,
+      "compactChars": 16913,
+      "compactTokens": 5717,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 172
+    },
+    {
+      "name": "run_command: 64KiB log, cap 8KiB",
+      "calls": 1,
+      "rawWireChars": 9393,
+      "textChars": 8904,
+      "textTokens": 3029,
+      "minifiedChars": 8827,
+      "minifiedTokens": 2978,
+      "compactChars": 8533,
+      "compactTokens": 2890,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 146
+    },
+    {
+      "name": "run_on_many: 10 hosts, 1 failure",
+      "calls": 1,
+      "rawWireChars": 6607,
+      "textChars": 5748,
+      "textTokens": 1897,
+      "minifiedChars": 4075,
+      "minifiedTokens": 1341,
+      "compactChars": 987,
+      "compactTokens": 384,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 1341
+    },
+    {
+      "name": "test_connection: success",
+      "calls": 1,
+      "rawWireChars": 227,
+      "textChars": 128,
+      "textTokens": 52,
+      "minifiedChars": 99,
+      "minifiedTokens": 33,
+      "compactChars": 11,
+      "compactTokens": 5,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 33
+    },
+    {
+      "name": "run_command: auth failure",
+      "calls": 1,
+      "rawWireChars": 903,
+      "textChars": 731,
+      "textTokens": 249,
+      "minifiedChars": 646,
+      "minifiedTokens": 194,
+      "compactChars": 346,
+      "compactTokens": 105,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 157
+    },
+    {
+      "name": "run_command: host key failure",
+      "calls": 1,
+      "rawWireChars": 922,
+      "textChars": 750,
+      "textTokens": 259,
+      "minifiedChars": 665,
+      "minifiedTokens": 204,
+      "compactChars": 365,
+      "compactTokens": 115,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 178
+    },
+    {
+      "name": "run_command: timeout",
+      "calls": 1,
+      "rawWireChars": 864,
+      "textChars": 689,
+      "textTokens": 241,
+      "minifiedChars": 604,
+      "minifiedTokens": 185,
+      "compactChars": 310,
+      "compactTokens": 98,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 148
+    },
+    {
+      "name": "list_connections: 5",
+      "calls": 1,
+      "rawWireChars": 4590,
+      "textChars": 4064,
+      "textTokens": 1356,
+      "minifiedChars": 3276,
+      "minifiedTokens": 1106,
+      "compactChars": 527,
+      "compactTokens": 175,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 1106
+    },
+    {
+      "name": "list_connections: 50",
+      "calls": 1,
+      "rawWireChars": 45146,
+      "textChars": 40570,
+      "textTokens": 13506,
+      "minifiedChars": 32717,
+      "minifiedTokens": 11006,
+      "compactChars": 5117,
+      "compactTokens": 1705,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 11006
+    },
+    {
+      "name": "get_connection: 1",
+      "calls": 1,
+      "rawWireChars": 942,
+      "textChars": 777,
+      "textTokens": 276,
+      "minifiedChars": 669,
+      "minifiedTokens": 227,
+      "compactChars": 101,
+      "compactTokens": 35,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 227
+    },
+    {
+      "name": "write_remote_file: success",
+      "calls": 1,
+      "rawWireChars": 277,
+      "textChars": 172,
+      "textTokens": 64,
+      "minifiedChars": 139,
+      "minifiedTokens": 43,
+      "compactChars": 58,
+      "compactTokens": 18,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 43
+    },
+    {
+      "name": "run_command: alias not found",
+      "calls": 1,
+      "rawWireChars": 151,
+      "textChars": 53,
+      "textTokens": 19,
+      "minifiedChars": 44,
+      "minifiedTokens": 13,
+      "compactChars": 44,
+      "compactTokens": 13,
+      "hasStructuredContent": false,
+      "contentDuplicatesStructured": false,
+      "metadataTokens": 13
+    }
+  ],
+  "totals": {
+    "textTokens": 49709,
+    "minifiedTokens": 45938,
+    "minifiedSavingsPct": 7.6,
+    "compactTokens": 33880,
+    "compactSavingsPct": 31.8
+  },
+  "listConnections50Fields": [
+    {
+      "field": "sshArgs",
+      "chars": 7759,
+      "tokens": 2803,
+      "shareOfResponse": "19.1%"
+    },
+    {
+      "field": "sshCommand",
+      "chars": 6762,
+      "tokens": 2304,
+      "shareOfResponse": "16.7%"
+    },
+    {
+      "field": "interactiveSshCommand",
+      "chars": 8573,
+      "tokens": 3005,
+      "shareOfResponse": "21.1%"
+    },
+    {
+      "field": "id",
+      "chars": 145,
+      "tokens": 101,
+      "shareOfResponse": "0.4%"
+    },
+    {
+      "field": "alias",
+      "chars": 407,
+      "tokens": 153,
+      "shareOfResponse": "1.0%"
+    },
+    {
+      "field": "user",
+      "chars": 456,
+      "tokens": 102,
+      "shareOfResponse": "1.1%"
+    },
+    {
+      "field": "host",
+      "chars": 406,
+      "tokens": 153,
+      "shareOfResponse": "1.0%"
+    },
+    {
+      "field": "port",
+      "chars": 356,
+      "tokens": 153,
+      "shareOfResponse": "0.9%"
+    },
+    {
+      "field": "key_path",
+      "chars": 1560,
+      "tokens": 554,
+      "shareOfResponse": "3.8%"
+    },
+    {
+      "field": "remote_path",
+      "chars": 563,
+      "tokens": 204,
+      "shareOfResponse": "1.4%"
+    },
+    {
+      "field": "lastUsed",
+      "chars": 413,
+      "tokens": 138,
+      "shareOfResponse": "1.0%"
+    }
+  ],
+  "runCommandFields": [
+    {
+      "field": "stdout",
+      "chars": 82,
+      "tokens": 45,
+      "shareOfResponse": "16.7%"
+    },
+    {
+      "field": "remoteCommand",
+      "chars": 39,
+      "tokens": 11,
+      "shareOfResponse": "7.9%"
+    },
+    {
+      "field": "target",
+      "chars": 28,
+      "tokens": 11,
+      "shareOfResponse": "5.7%"
+    },
+    {
+      "field": "stdoutTruncated",
+      "chars": 23,
+      "tokens": 6,
+      "shareOfResponse": "4.7%"
+    },
+    {
+      "field": "stderrTruncated",
+      "chars": 23,
+      "tokens": 6,
+      "shareOfResponse": "4.7%"
+    },
+    {
+      "field": "command",
+      "chars": 18,
+      "tokens": 6,
+      "shareOfResponse": "3.7%"
+    },
+    {
+      "field": "cwd",
+      "chars": 16,
+      "tokens": 7,
+      "shareOfResponse": "3.3%"
+    },
+    {
+      "field": "stdoutBytes",
+      "chars": 16,
+      "tokens": 5,
+      "shareOfResponse": "3.3%"
+    },
+    {
+      "field": "timedOut",
+      "chars": 16,
+      "tokens": 6,
+      "shareOfResponse": "3.3%"
+    },
+    {
+      "field": "alias",
+      "chars": 15,
+      "tokens": 6,
+      "shareOfResponse": "3.1%"
+    },
+    {
+      "field": "stderrBytes",
+      "chars": 15,
+      "tokens": 5,
+      "shareOfResponse": "3.1%"
+    },
+    {
+      "field": "stdoutLines",
+      "chars": 15,
+      "tokens": 5,
+      "shareOfResponse": "3.1%"
+    },
+    {
+      "field": "stderrLines",
+      "chars": 15,
+      "tokens": 5,
+      "shareOfResponse": "3.1%"
+    },
+    {
+      "field": "durationMs",
+      "chars": 14,
+      "tokens": 5,
+      "shareOfResponse": "2.9%"
+    },
+    {
+      "field": "reused",
+      "chars": 14,
+      "tokens": 5,
+      "shareOfResponse": "2.9%"
+    },
+    {
+      "field": "signal",
+      "chars": 13,
+      "tokens": 4,
+      "shareOfResponse": "2.6%"
+    },
+    {
+      "field": "exitCode",
+      "chars": 12,
+      "tokens": 5,
+      "shareOfResponse": "2.4%"
+    },
+    {
+      "field": "stderr",
+      "chars": 11,
+      "tokens": 4,
+      "shareOfResponse": "2.2%"
+    },
+    {
+      "field": "ok",
+      "chars": 9,
+      "tokens": 4,
+      "shareOfResponse": "1.8%"
+    }
+  ],
+  "runOnManyFields": [
+    {
+      "field": "stdout",
+      "occurrences": 10,
+      "chars": 820,
+      "shareOfResponse": "13.9%"
+    },
+    {
+      "field": "remoteCommand",
+      "occurrences": 10,
+      "chars": 400,
+      "shareOfResponse": "6.8%"
+    },
+    {
+      "field": "target",
+      "occurrences": 10,
+      "chars": 280,
+      "shareOfResponse": "4.7%"
+    },
+    {
+      "field": "stdoutTruncated",
+      "occurrences": 10,
+      "chars": 230,
+      "shareOfResponse": "3.9%"
+    },
+    {
+      "field": "stderrTruncated",
+      "occurrences": 10,
+      "chars": 230,
+      "shareOfResponse": "3.9%"
+    },
+    {
+      "field": "command",
+      "occurrences": 10,
+      "chars": 190,
+      "shareOfResponse": "3.2%"
+    },
+    {
+      "field": "cwd",
+      "occurrences": 10,
+      "chars": 160,
+      "shareOfResponse": "2.7%"
+    },
+    {
+      "field": "stdoutBytes",
+      "occurrences": 10,
+      "chars": 160,
+      "shareOfResponse": "2.7%"
+    },
+    {
+      "field": "timedOut",
+      "occurrences": 10,
+      "chars": 160,
+      "shareOfResponse": "2.7%"
+    },
+    {
+      "field": "alias",
+      "occurrences": 10,
+      "chars": 150,
+      "shareOfResponse": "2.5%"
+    },
+    {
+      "field": "stderrBytes",
+      "occurrences": 10,
+      "chars": 150,
+      "shareOfResponse": "2.5%"
+    },
+    {
+      "field": "stdoutLines",
+      "occurrences": 10,
+      "chars": 150,
+      "shareOfResponse": "2.5%"
+    },
+    {
+      "field": "stderrLines",
+      "occurrences": 10,
+      "chars": 150,
+      "shareOfResponse": "2.5%"
+    },
+    {
+      "field": "durationMs",
+      "occurrences": 10,
+      "chars": 140,
+      "shareOfResponse": "2.4%"
+    },
+    {
+      "field": "reused",
+      "occurrences": 10,
+      "chars": 140,
+      "shareOfResponse": "2.4%"
+    },
+    {
+      "field": "signal",
+      "occurrences": 10,
+      "chars": 130,
+      "shareOfResponse": "2.2%"
+    },
+    {
+      "field": "exitCode",
+      "occurrences": 10,
+      "chars": 120,
+      "shareOfResponse": "2.0%"
+    },
+    {
+      "field": "stderr",
+      "occurrences": 10,
+      "chars": 110,
+      "shareOfResponse": "1.9%"
+    },
+    {
+      "field": "ok",
+      "occurrences": 10,
+      "chars": 90,
+      "shareOfResponse": "1.5%"
+    }
+  ],
+  "headTailProjection": [
+    {
+      "bytes": 4096,
+      "chars": 4145,
+      "tokens": 1414
+    },
+    {
+      "bytes": 8192,
+      "chars": 8241,
+      "tokens": 2812
+    },
+    {
+      "bytes": 16384,
+      "chars": 16433,
+      "tokens": 5601
+    }
+  ],
+  "wireShape": {
+    "resultKeys": [
+      "content"
+    ],
+    "contentParts": 1,
+    "hasStructuredContent": false,
+    "contentChars": 5899,
+    "structuredChars": 0,
+    "duplicateChars": 0
+  },
+  "findings": {
+    "defaultCapBytes": 65536,
+    "bytesPerTokenLog": 3
+  }
+}

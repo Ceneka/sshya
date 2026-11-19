@@ -1,0 +1,169 @@
+{
+  "tokenizer": "gpt-tokenizer 3.x o200k_base (cl100k_base for reference)",
+  "tasks": [
+    {
+      "task": "check disk on 5 hosts (discover + fan out)",
+      "calls": 2,
+      "responseTokens": 2315,
+      "outputTokens": 0,
+      "totalTokens": 2315,
+      "idealCalls": 2,
+      "idealTokens": 296,
+      "savingPct": 87.2,
+      "note": "run_on_many already saves 5 calls; response metadata still costs ~959 tok. Compact list + compact fan-out would cost 296 tok. Calling run_command per host would cost 181 tok/host (905 tok, 5 calls)."
+    },
+    {
+      "task": "tail a log (agent asks for last 50 lines)",
+      "calls": 1,
+      "responseTokens": 5476,
+      "outputTokens": 0,
+      "totalTokens": 5476,
+      "idealCalls": 1,
+      "idealTokens": 2296,
+      "savingPct": 58.1,
+      "note": "Works today with \"| tail -n 50\". Without tail in the command, the default cap returns 22,710 tok (67,549 chars, truncated at 64 KiB). 50 lines already costs 5,476 tok; 20 lines costs 2,296 tok."
+    },
+    {
+      "task": "edit one line in a 20 KiB config",
+      "calls": 3,
+      "responseTokens": 6785,
+      "outputTokens": 5537,
+      "totalTokens": 12322,
+      "idealCalls": 2,
+      "idealTokens": 650,
+      "savingPct": 94.7,
+      "note": "No read/edit tool: the agent cats 5,537 tok, emits the whole file (5,537 tok output), rewrites it, then verifies. A read_remote_file(offset,limit) + replace_in_remote_file would need ~40 lines + ~20 tok ack + verify."
+    },
+    {
+      "task": "restart a service and verify",
+      "calls": 1,
+      "responseTokens": 173,
+      "outputTokens": 0,
+      "totalTokens": 173,
+      "idealCalls": 1,
+      "idealTokens": 173,
+      "savingPct": 0,
+      "note": "One compound command works without sudo. With sudo the failure (240 tok) is classified as \"unknown\" and the hint does not mention tty:true; retrying with tty burns a timeout."
+    },
+    {
+      "task": "find which of 10 hosts has an error",
+      "calls": 1,
+      "responseTokens": 1814,
+      "outputTokens": 0,
+      "totalTokens": 1814,
+      "idealCalls": 1,
+      "idealTokens": 20,
+      "savingPct": 98.9,
+      "note": "Answer is one alias, but every host carries ~19 fields. Compact = 153 tok; a matched-only reply ({matched:[{alias:\"web04\",count:7}]}) is ~20 tok. 50 hosts costs 8,894 tok (28,709 chars) for an answer that is a list of failing aliases."
+    },
+    {
+      "task": "read lines 200-240 of a log",
+      "calls": 1,
+      "responseTokens": 4525,
+      "outputTokens": 0,
+      "totalTokens": 4525,
+      "idealCalls": 1,
+      "idealTokens": 4525,
+      "savingPct": 0,
+      "note": "sed works (4,525 tok). No read_remote_file means the agent must know sed/awk and shell-quote; a read_remote_file(offset,limit) would be discoverable and would not mangle binary data."
+    },
+    {
+      "task": "recover from a typo in an alias",
+      "calls": 2,
+      "responseTokens": 2730,
+      "outputTokens": 0,
+      "totalTokens": 2730,
+      "idealCalls": 1,
+      "idealTokens": 60,
+      "savingPct": 97.8,
+      "note": "\"Alias not found\" returns no hint, no candidates and no errorKind; the agent must list the store (2,710 tok for 10 connections; compact list 213 tok) or guess again. Three closest aliases in the error would cost ~20 tok."
+    },
+    {
+      "task": "fleet check (50 hosts, one line each)",
+      "calls": 1,
+      "responseTokens": 8294,
+      "outputTokens": 0,
+      "totalTokens": 8294,
+      "idealCalls": 1,
+      "idealTokens": 16,
+      "savingPct": 99.8,
+      "note": "8,294 tok for 50 one-word answers; compact results = 713 tok; a failures-only summary = 16 tok."
+    }
+  ],
+  "totals": {
+    "measuredTaskTokens": 37649,
+    "idealTokens": 8036,
+    "savingsPct": 78.7,
+    "calls": 12,
+    "idealCalls": 10
+  },
+  "friction": {
+    "responseMeta": {
+      "totalChars": 427,
+      "metadataChars": 262,
+      "outputChars": 7,
+      "metadataShare": "61.4%"
+    },
+    "aliasError": {
+      "ok": false,
+      "error": "Alias not found: webb01",
+      "tokens": 20,
+      "hasHint": false,
+      "hasCandidates": false,
+      "hasErrorKind": false
+    },
+    "sudoError": {
+      "errorKind": "unknown",
+      "hint": "The SSH client or remote command failed. Inspect stderr; add `--timeout`/`--no-cwd` or run `sshya doctor --probe` to isolate the cause.",
+      "tokens": 240
+    },
+    "cliFlagsInHints": [
+      "`--accept-new-host-key`",
+      "`--timeout`",
+      "`--no-cwd`",
+      "`sshya show <alias>`",
+      "`sshya doctor --probe`"
+    ],
+    "toolParamMismatches": [
+      {
+        "mcp": "write_remote_file.path",
+        "store": "connection.remote_path",
+        "note": "same concept, different name"
+      },
+      {
+        "mcp": "run_command.cwd (boolean)",
+        "note": "returns cwd as a string in the result; the boolean reads like a path"
+      },
+      {
+        "mcp": "run_command.maxOutputBytes",
+        "cli": "--max-output",
+        "note": "no maxOutputBytes on run_on_many docs even though it exists"
+      },
+      {
+        "mcp": "run_command.timeoutMs",
+        "cli": "--timeout",
+        "note": "CLI accepts seconds, MCP milliseconds"
+      },
+      {
+        "mcp": "run_on_many",
+        "note": "no tty, stdin, or reuse params: cannot run sudo or pipe data across a fleet"
+      },
+      {
+        "mcp": "run_command.tail (boolean)",
+        "note": "only switches which end is kept when truncating; does not add `tail -n`"
+      }
+    ]
+  },
+  "projections": {
+    "note": "Computed from the measured responses; no product change.",
+    "compactMany10": 153,
+    "matched10": 14,
+    "fleet50FailuresOnly": 16,
+    "compactList10": 213
+  },
+  "fixtures": {
+    "logLines": 300,
+    "configBytes": 20515,
+    "bigFileLines": 500
+  }
+}

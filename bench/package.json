@@ -1,0 +1,12 @@
+{
+  "name": "sshya-bench",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible measurements of sshya's MCP context cost and agent ergonomics",
+  "scripts": {
+    "all": "bun run 01-fixed-cost.ts && bun run 02-call-cost.ts && bun run 03-latency.ts && bun run 04-ergonomics.ts"
+  },
+  "dependencies": {
+    "gpt-tokenizer": "^3.4.0"
+  }
+}
