@@ -12,7 +12,7 @@ import { printConnectionsPrompt } from './src/helpers/connection';
 import { enableEscapeExit } from './src/helpers/escExit';
 import { runFzfLauncher } from './src/helpers/fzf';
 import type { HostKeyChecking } from './src/helpers/ssh';
-import { autoSyncForCli, linkSetCommand, linkShowCommand, linkUnsetCommand, syncCommand } from './src/link/commands';
+import { autoSyncForCli, linkKeyCommand, linkSetCommand, linkShowCommand, linkUnsetCommand, syncCommand } from './src/link/commands';
 import { jsonEnabled } from './src/output';
 
 const version = pkg?.version ?? '1.0.0';
@@ -377,6 +377,15 @@ link
   .description('Show the link configuration and last sync')
   .option('--json', 'Machine-readable JSON output')
   .action((options: { json?: boolean }) => linkShowCommand(options));
+
+link
+  .command('key [key] [path]')
+  .aliases(['keys'])
+  .description('List lazybackup stored keys, or map one to a local private key file')
+  .option('--unset', 'Remove the local mapping for this key')
+  .option('--json', 'Machine-readable JSON output')
+  .action((key: string | undefined, keyPath: string | undefined, options: { unset?: boolean; json?: boolean }) =>
+    linkKeyCommand(key, keyPath, options));
 
 link
   .command('unset')

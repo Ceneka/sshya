@@ -159,6 +159,28 @@ describe('planSync', () => {
   });
 });
 
+describe('vault key mapping', () => {
+  const vaultServer = server({ id: 'v', name: 'vault', systemKeyPath: null, sshKeyId: 'k1' });
+
+  test('a mapped vault key applies to every server using it', () => {
+    const keyFile = path.join(home, '.ssh', 'mine');
+    const { next, report } = planSync([], {
+      servers: [vaultServer, server({ id: 'v2', name: 'vault2', systemKeyPath: null, sshKeyId: 'k1' })],
+      keys: [{ id: 'k1', name: 'LazyBackup', hasPrivateKeyContent: true }],
+    }, { url: 'x', vaultKeys: { k1: '~/.ssh/mine' }, exists: onlyFiles(keyFile) });
+    expect(next.map(c => c.key_path)).toEqual([keyFile, keyFile]);
+    expect(report.warnings).toEqual([]);
+  });
+
+  test('warns when the mapped file is missing, and names unmapped keys', () => {
+    const missing = planSync([], { servers: [vaultServer], keys: [] }, { url: 'x', vaultKeys: { k1: '/nope' }, exists: noFiles });
+    expect(missing.report.warnings[0]?.kind).toBe('missing_key');
+    const unmapped = planSync([], { servers: [vaultServer], keys: [{ id: 'k1', name: 'LazyBackup' }] }, { url: 'x', exists: noFiles });
+    expect(unmapped.report.warnings[0]).toMatchObject({ kind: 'vault_key' });
+    expect(unmapped.report.warnings[0]?.message).toContain('sshya link key k1');
+  });
+});
+
 describe('linked connection guards', () => {
   beforeEach(() => {
     replaceConnections([{ id: 1, alias: 'web', user: 'root', host: 'h', link: { source: 'lazybackup', id: 'srv1' } }]);

@@ -1,4 +1,5 @@
-import { getConnections, replaceConnections, type Connection, type ConnectionLink } from '../database';
+import fs from 'fs';
+import { expandHomePath, getConnections, replaceConnections, type Connection, type ConnectionLink } from '../database';
 import {
   DEFAULT_KEY_MAP,
   loadLinkConfig,
@@ -75,7 +76,8 @@ const describeKey = (
   alias: string,
   snapshot: LazybackupSnapshot,
   keyMap: KeyMapEntry[],
-  exists?: (file: string) => boolean,
+  exists: (file: string) => boolean = fs.existsSync,
+  vaultKeys: Record<string, string> = {},
 ): { keyPath?: string; warning?: SyncWarning } => {
   if (server.authType === 'password') {
     return {
@@ -83,6 +85,20 @@ const describeKey = (
         alias,
         kind: 'password_auth',
         message: 'Uses password auth in lazybackup: interactive connect prompts for it, `run` needs --allow-password.',
+      },
+    };
+  }
+  const mapped = server.sshKeyId ? vaultKeys[server.sshKeyId] : undefined;
+  if (mapped) {
+    const keyPath = expandHomePath(mapped) ?? mapped;
+    if (exists(keyPath)) {
+      return { keyPath };
+    }
+    return {
+      warning: {
+        alias,
+        kind: 'missing_key',
+        message: `Mapped key ${mapped} does not exist on this machine; fix it with \`sshya link key ${server.sshKeyId} <path>\`.`,
       },
     };
   }
@@ -105,7 +121,7 @@ const describeKey = (
       warning: {
         alias,
         kind: 'vault_key',
-        message: `Key is stored inside lazybackup and is never exported; load it into your ssh-agent or run \`sshya update ${alias} --key <path>\`.`,
+        message: `Key "${snapshot.keys.find(key => key.id === server.sshKeyId)?.name ?? server.sshKeyId}" is stored inside lazybackup and is never exported; map it once with \`sshya link key ${server.sshKeyId} <path>\` (or use your ssh-agent).`,
       },
     };
   }
@@ -133,7 +149,12 @@ const describeKey = (
 export const planSync = (
   local: Connection[],
   snapshot: LazybackupSnapshot,
-  options: { url: string; keyMap?: KeyMapEntry[]; exists?: (file: string) => boolean },
+  options: {
+    url: string;
+    keyMap?: KeyMapEntry[];
+    vaultKeys?: Record<string, string>;
+    exists?: (file: string) => boolean;
+  },
 ): { next: Connection[]; report: SyncReport } => {
   const keyMap = options.keyMap ?? DEFAULT_KEY_MAP;
   const report: SyncReport = {
@@ -160,7 +181,7 @@ export const planSync = (
         alias = `${base}-${n}`;
       }
       usedRemoteAliases.add(alias);
-      const { keyPath, warning } = describeKey(server, alias, snapshot, keyMap, options.exists);
+      const { keyPath, warning } = describeKey(server, alias, snapshot, keyMap, options.exists, options.vaultKeys);
       return {
         server,
         alias,
@@ -285,7 +306,7 @@ export const syncLink = async (options: SyncOptions = {}): Promise<SyncReport> =
   const attemptAt = Date.now();
   try {
     const snapshot = await fetchLazybackupSnapshot(config, { timeoutMs: options.timeoutMs, fetchImpl: options.fetchImpl });
-    const { next, report } = planSync(getConnections(), snapshot, { url: config.url, keyMap: config.keyMap });
+    const { next, report } = planSync(getConnections(), snapshot, { url: config.url, keyMap: config.keyMap, vaultKeys: config.vaultKeys });
     const changed = report.added.length + report.updated.length + report.removed.length + report.adopted.length > 0;
     if (changed) {
       replaceConnections(next);

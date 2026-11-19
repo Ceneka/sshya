@@ -23,6 +23,12 @@ export interface LinkConfig {
   /** Auto-sync freshness window in seconds. 0 disables auto-sync. */
   ttlSeconds?: number;
   keyMap?: KeyMapEntry[];
+  /**
+   * lazybackup stored-key id → local private key path. Keys pasted into
+   * lazybackup are never exported, so each machine maps them once and every
+   * server using that key picks it up.
+   */
+  vaultKeys?: Record<string, string>;
 }
 
 export interface LinkState {
@@ -86,6 +92,7 @@ export const loadLinkConfig = (): LinkConfig | undefined => {
     cfAccessClientSecret: envString('SSHYA_CF_ACCESS_CLIENT_SECRET') ?? stored?.cfAccessClientSecret,
     ttlSeconds: ttl !== undefined && Number.isFinite(ttl) && ttl >= 0 ? ttl : DEFAULT_TTL_SECONDS,
     keyMap: Array.isArray(stored?.keyMap) && stored.keyMap.length > 0 ? stored.keyMap : DEFAULT_KEY_MAP,
+    vaultKeys: stored?.vaultKeys && typeof stored.vaultKeys === 'object' ? stored.vaultKeys : undefined,
   };
 };
 

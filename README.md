@@ -363,8 +363,10 @@ How it maps:
 - The alias is the lazybackup server name, slugified (`Web Prod` → `web-prod`).
 - Keys: lazybackup's `systemKeyPath` (or a stored key's path) is translated from
   the container mount `/root/.ssh` to `~/.ssh`, falling back to
-  `~/.ssh/<basename>`. Keys pasted into lazybackup are never exported; use your
-  ssh-agent or `sshya update <alias> --key <path>` (a local key sticks across syncs).
+  `~/.ssh/<basename>`. Keys pasted into lazybackup are never exported: map each
+  one once per machine with `sshya link key <id|name> <path>` and every server
+  using it picks it up (`sshya link key` lists keys, their servers, and mappings).
+  `sshya update <alias> --key <path>` still overrides a single connection.
 - Linked connections are read-only for alias/user/host/port and cannot be
   removed locally (`errorKind: linked_connection`). `key_path`, `remote_path`,
   `readonly`, and usage history stay local.

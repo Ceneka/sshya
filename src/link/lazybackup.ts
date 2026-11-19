@@ -122,7 +122,7 @@ const isServer = (value: unknown): value is LazybackupServer => {
 /** Fetch servers plus stored keys (to resolve `sshKeyId` → a key path). */
 export const fetchLazybackupSnapshot = async (
   config: LinkConfig,
-  options: { timeoutMs?: number; fetchImpl?: FetchLike } = {},
+  options: { timeoutMs?: number; fetchImpl?: FetchLike; includeKeys?: boolean } = {},
 ): Promise<LazybackupSnapshot> => {
   const timeoutMs = options.timeoutMs ?? 15_000;
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -134,7 +134,7 @@ export const fetchLazybackupSnapshot = async (
   const servers = serversRaw.filter(isServer);
 
   let keys: LazybackupSshKey[] = [];
-  if (servers.some(server => server.sshKeyId)) {
+  if (options.includeKeys || servers.some(server => server.sshKeyId)) {
     try {
       const keysRaw = await getJson(config, '/api/ssh-keys', timeoutMs, fetchImpl) as { storedKeys?: unknown };
       if (Array.isArray(keysRaw?.storedKeys)) {

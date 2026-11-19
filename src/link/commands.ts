@@ -12,7 +12,9 @@ import {
   saveLinkConfig,
   type LinkConfig,
 } from './config';
-import { LinkFetchError } from './lazybackup';
+import fs from 'fs';
+import { expandHomePath } from '../database';
+import { fetchLazybackupSnapshot, LinkFetchError, type LazybackupSshKey } from './lazybackup';
 import { autoSync, syncLink, type SyncReport } from './sync';
 
 const readStdin = async (): Promise<string> => {
@@ -171,6 +173,7 @@ export async function linkShowCommand(options: { json?: boolean } = {}): Promise
     cfAccess: config.cfAccessClientId ? { clientId: config.cfAccessClientId, clientSecret: maskSecret(config.cfAccessClientSecret) } : undefined,
     ttlSeconds: config.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     keyMap: config.keyMap,
+    vaultKeys: config.vaultKeys,
     connections: linked,
     lastSyncAt: state.lastSyncAt ? new Date(state.lastSyncAt).toISOString() : undefined,
     lastError: state.lastError,
@@ -187,6 +190,10 @@ export async function linkShowCommand(options: { json?: boolean } = {}): Promise
   }
   console.log(chalk.grey(`  auto-sync:   ${payload.ttlSeconds ? `every ${payload.ttlSeconds}s` : 'off'}`));
   console.log(chalk.grey(`  key map:     ${(config.keyMap ?? []).map(entry => `${entry.from} → ${entry.to}`).join(', ')}`));
+  const vaultCount = Object.keys(config.vaultKeys ?? {}).length;
+  if (vaultCount > 0) {
+    console.log(chalk.grey(`  vault keys:  ${vaultCount} mapped (sshya link key)`));
+  }
   console.log(chalk.grey(`  connections: ${linked} linked`));
   console.log(chalk.grey(`  last sync:   ${payload.lastSyncAt ?? 'never'}`));
   if (payload.lastError) {
@@ -219,6 +226,115 @@ export async function linkUnsetCommand(options: { purge?: boolean; json?: boolea
         ? chalk.grey(`Removed ${linked.length} linked connection(s).`)
         : chalk.grey(`Kept ${linked.length} connection(s) as local, unmanaged entries.`),
     );
+  }
+}
+
+/** Match a stored key by id, exact name, or unique id/name prefix (case-insensitive). */
+const findKey = (keys: LazybackupSshKey[], query: string): LazybackupSshKey | LazybackupSshKey[] | undefined => {
+  const q = query.trim().toLowerCase();
+  const exact = keys.find(key => key.id.toLowerCase() === q || (key.name ?? '').toLowerCase() === q);
+  if (exact) {
+    return exact;
+  }
+  const partial = keys.filter(key => key.id.toLowerCase().startsWith(q) || (key.name ?? '').toLowerCase().includes(q));
+  return partial.length === 1 ? partial[0] : partial.length > 1 ? partial : undefined;
+};
+
+export interface LinkKeyOptions {
+  unset?: boolean;
+  json?: boolean;
+}
+
+/**
+ * `sshya link key` lists lazybackup's stored keys with their local mapping;
+ * `sshya link key <key> <path>` maps one (then syncs); `--unset` removes it.
+ */
+export async function linkKeyCommand(query: string | undefined, keyPath: string | undefined, options: LinkKeyOptions = {}): Promise<void> {
+  const json = jsonEnabled(options.json);
+  const config = loadLinkConfig();
+  const stored = readStoredLinkConfig();
+  if (!config || !stored) {
+    failLink(json, new Error('No lazybackup link configured. Run `sshya link set <url> --token <token>` first.'));
+    return;
+  }
+
+  let snapshot;
+  try {
+    snapshot = await fetchLazybackupSnapshot(config, { includeKeys: true });
+  } catch (err) {
+    failLink(json, err);
+    return;
+  }
+  const mappings = { ...(stored.vaultKeys ?? {}) };
+  const usage = (id: string) => snapshot.servers.filter(server => server.sshKeyId === id).map(server => server.name);
+
+  if (!query) {
+    const rows = snapshot.keys.map(key => ({
+      id: key.id,
+      name: key.name,
+      servers: usage(key.id),
+      ...(mappings[key.id] ? { localPath: mappings[key.id], exists: fs.existsSync(expandHomePath(mappings[key.id]) ?? '') } : {}),
+    }));
+    if (json) {
+      printJson({ ok: true, keys: rows });
+      return;
+    }
+    if (rows.length === 0) {
+      console.log('lazybackup has no stored keys.');
+      return;
+    }
+    for (const row of rows) {
+      const mapped = row.localPath
+        ? (row.exists ? chalk.green(`→ ${row.localPath}`) : chalk.yellow(`→ ${row.localPath} (missing)`))
+        : chalk.grey('(not mapped)');
+      console.log(`${chalk.bold(row.name ?? row.id)} ${chalk.grey(row.id)} ${mapped}`);
+      if (row.servers.length > 0) {
+        console.log(chalk.grey(`    used by: ${row.servers.join(', ')}`));
+      }
+    }
+    console.log(chalk.grey('\nMap one with: sshya link key <id|name> <path>'));
+    return;
+  }
+
+  const match = findKey(snapshot.keys, query);
+  if (!match || Array.isArray(match)) {
+    const message = !match
+      ? `No lazybackup key matches "${query}".`
+      : `"${query}" matches several keys: ${match.map(key => `${key.name ?? ''} (${key.id})`).join(', ')}. Use the id.`;
+    failLink(json, new Error(message));
+    return;
+  }
+
+  if (options.unset) {
+    delete mappings[match.id];
+  } else {
+    if (!keyPath) {
+      failLink(json, new Error('A local key path is required (or pass --unset).'));
+      return;
+    }
+    const resolved = expandHomePath(keyPath.trim()) ?? keyPath;
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      failLink(json, new Error(`Key file not found: ${resolved}`));
+      return;
+    }
+    mappings[match.id] = resolved;
+  }
+  saveLinkConfig({ ...stored, vaultKeys: Object.keys(mappings).length > 0 ? mappings : undefined });
+
+  try {
+    const report = await syncLink();
+    if (json) {
+      printJson({ ...report, key: { id: match.id, name: match.name, localPath: mappings[match.id] ?? null, servers: usage(match.id) } });
+    } else {
+      console.log(chalk.green(
+        options.unset
+          ? `Unmapped "${match.name ?? match.id}".`
+          : `Mapped "${match.name ?? match.id}" → ${mappings[match.id]} (${usage(match.id).length} server(s)).`,
+      ));
+      printReport(report);
+    }
+  } catch (err) {
+    failLink(json, err);
   }
 }
 
