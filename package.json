@@ -3,7 +3,7 @@
   "main": "dist/index.js",
   "module": "dist/index.js",
   "type": "module",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "CLI and MCP server for managing SSH connections with aliases, pooled connections, and LLM-friendly JSON output",
   "license": "MIT",
   "author": "ceneka",
