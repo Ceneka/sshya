@@ -26,11 +26,24 @@ export interface LazybackupSnapshot {
   keys: LazybackupSshKey[];
 }
 
+export type LinkErrorKind =
+  | 'link_unreachable'
+  | 'link_unauthorized'
+  | 'link_access_blocked'
+  | 'link_bad_response'
+  /** The token lacks `authorize_keys` (or `remote_exec`). */
+  | 'link_forbidden'
+  /** lazybackup is too old for the requested endpoint. */
+  | 'link_unsupported'
+  /** lazybackup could not update the server's authorized_keys. */
+  | 'link_authorize_failed';
+
 export class LinkFetchError extends Error {
   constructor(
     message: string,
-    readonly errorKind: 'link_unreachable' | 'link_unauthorized' | 'link_access_blocked' | 'link_bad_response',
+    readonly errorKind: LinkErrorKind,
     readonly hint?: string,
+    readonly status?: number,
   ) {
     super(message);
     this.name = 'LinkFetchError';
@@ -51,17 +64,33 @@ const buildHeaders = (config: LinkConfig): Record<string, string> => {
   return headers;
 };
 
-const getJson = async (
+const errorMessageFrom = (text: string): string | undefined => {
+  try {
+    const body = JSON.parse(text) as { error?: unknown };
+    return typeof body?.error === 'string' && body.error ? body.error : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const requestJson = async (
   config: LinkConfig,
   pathname: string,
   timeoutMs: number,
   fetchImpl: FetchLike,
+  request: { method?: string; body?: unknown } = {},
 ): Promise<unknown> => {
   const url = `${config.url}${pathname}`;
+  const headers = buildHeaders(config);
+  if (request.body !== undefined) {
+    headers['content-type'] = 'application/json';
+  }
   let response: Response;
   try {
     response = await fetchImpl(url, {
-      headers: buildHeaders(config),
+      method: request.method ?? 'GET',
+      headers,
+      ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
       // A CF Access login redirect must surface as an error, not as HTML.
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
@@ -87,16 +116,24 @@ const getJson = async (
     // lazybackup answers its own 401/403 with JSON; Cloudflare Access with HTML.
     const contentType = response.headers.get('content-type') ?? '';
     const blockedByAccess = response.headers.has('cf-access-domain') || !contentType.includes('json');
+    const detail = blockedByAccess ? undefined : errorMessageFrom(await response.text().catch(() => ''));
     throw new LinkFetchError(
-      `lazybackup refused the request (${response.status}).`,
+      `lazybackup refused the request (${response.status}${detail ? `: ${detail}` : ''}).`,
       blockedByAccess ? 'link_access_blocked' : 'link_unauthorized',
       blockedByAccess
         ? 'Cloudflare Access denied the request: check the service token and that the Access policy allows it.'
         : 'Create an API token in lazybackup (Settings → API / MCP; read_only is enough) and run `sshya link set <url> --token <token>`.',
+      response.status,
     );
   }
   if (!response.ok) {
-    throw new LinkFetchError(`lazybackup returned HTTP ${response.status} for ${pathname}.`, 'link_bad_response');
+    const detail = errorMessageFrom(await response.text().catch(() => ''));
+    throw new LinkFetchError(
+      `lazybackup returned HTTP ${response.status} for ${pathname}${detail ? `: ${detail}` : '.'}`,
+      'link_bad_response',
+      undefined,
+      response.status,
+    );
   }
 
   const text = await response.text();
@@ -127,7 +164,7 @@ export const fetchLazybackupSnapshot = async (
   const timeoutMs = options.timeoutMs ?? 15_000;
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
 
-  const serversRaw = await getJson(config, '/api/servers', timeoutMs, fetchImpl);
+  const serversRaw = await requestJson(config, '/api/servers', timeoutMs, fetchImpl);
   if (!Array.isArray(serversRaw)) {
     throw new LinkFetchError('lazybackup /api/servers did not return a list.', 'link_bad_response');
   }
@@ -136,7 +173,7 @@ export const fetchLazybackupSnapshot = async (
   let keys: LazybackupSshKey[] = [];
   if (options.includeKeys || servers.some(server => server.sshKeyId)) {
     try {
-      const keysRaw = await getJson(config, '/api/ssh-keys', timeoutMs, fetchImpl) as { storedKeys?: unknown };
+      const keysRaw = await requestJson(config, '/api/ssh-keys', timeoutMs, fetchImpl) as { storedKeys?: unknown };
       if (Array.isArray(keysRaw?.storedKeys)) {
         keys = keysRaw.storedKeys.filter(
           (key): key is LazybackupSshKey => Boolean(key) && typeof (key as LazybackupSshKey).id === 'string',
@@ -148,4 +185,78 @@ export const fetchLazybackupSnapshot = async (
   }
 
   return { servers, keys };
+};
+
+export interface AuthorizeKeyResult {
+  /** authorize: `added` | `present`; revoke: `removed` | `absent`. */
+  status: 'added' | 'present' | 'removed' | 'absent';
+  fingerprint?: string;
+}
+
+const AUTHORIZE_STATUSES = new Set(['added', 'present', 'removed', 'absent']);
+
+/**
+ * Ask lazybackup to add (or remove) `publicKey` in a server's authorized_keys
+ * with the credentials it stores. Needs a token with `authorize_keys` (or
+ * `remote_exec`); a read_only token can carry it too.
+ */
+export const updateAuthorizedKey = async (
+  config: LinkConfig,
+  serverId: string,
+  publicKey: string,
+  action: 'authorize' | 'revoke',
+  options: { timeoutMs?: number; fetchImpl?: FetchLike } = {},
+): Promise<AuthorizeKeyResult> => {
+  const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+  const pathname = `/api/servers/${encodeURIComponent(serverId)}/authorize-key`;
+  let body: unknown;
+  try {
+    body = await requestJson(config, pathname, options.timeoutMs ?? 45_000, fetchImpl, {
+      method: action === 'authorize' ? 'POST' : 'DELETE',
+      body: { publicKey },
+    });
+  } catch (err) {
+    if (!(err instanceof LinkFetchError)) {
+      throw err;
+    }
+    // Only a lazybackup without authorize-key answers a read_only token this way;
+    // newer ones let the request through to the route's own permission check.
+    if (err.status === 403 && /API token is read_only/.test(err.message)) {
+      throw new LinkFetchError(
+        'This lazybackup is too old to authorize keys for a read_only token.',
+        'link_unsupported',
+        'Update lazybackup and create a token with "Allow authorizing SSH keys", or map the key by hand with `sshya link key <id> <path>`.',
+        403,
+      );
+    }
+    if (err.errorKind === 'link_unauthorized' && err.status === 403) {
+      throw new LinkFetchError(
+        'the lazybackup token lacks the authorize_keys permission.',
+        'link_forbidden',
+        'In lazybackup (Settings → API / MCP) create a token with "Allow authorizing SSH keys" (Read only can stay on), then `sshya link set --token-stdin`. Or map the key by hand with `sshya link key`.',
+        403,
+      );
+    }
+    // A missing route is an HTML 404/405; a missing server is a JSON 404 with a message.
+    if ((err.status === 404 && !/Server not found/.test(err.message)) || err.status === 405) {
+      throw new LinkFetchError(
+        `This lazybackup does not support authorizing keys (${err.message}).`,
+        'link_unsupported',
+        'Update lazybackup, or map the key by hand with `sshya link key <id> <path>`.',
+        err.status,
+      );
+    }
+    if (err.errorKind === 'link_bad_response' && err.status !== undefined && err.status >= 500) {
+      throw new LinkFetchError(err.message, 'link_authorize_failed', 'lazybackup could not reach or update the server; it retries on the next `sshya sync`.', err.status);
+    }
+    throw err;
+  }
+  const result = body as { status?: unknown; fingerprint?: unknown };
+  if (typeof result?.status !== 'string' || !AUTHORIZE_STATUSES.has(result.status)) {
+    throw new LinkFetchError(`lazybackup returned an unexpected answer for ${pathname}.`, 'link_bad_response');
+  }
+  return {
+    status: result.status as AuthorizeKeyResult['status'],
+    ...(typeof result.fingerprint === 'string' ? { fingerprint: result.fingerprint } : {}),
+  };
 };

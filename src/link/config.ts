@@ -29,12 +29,20 @@ export interface LinkConfig {
    * server using that key picks it up.
    */
   vaultKeys?: Record<string, string>;
+  /**
+   * When a server's key is not available locally, ask lazybackup to install
+   * this machine's sshya key in its authorized_keys. Default on;
+   * `SSHYA_LINK_AUTHORIZE=0` turns it off for one process.
+   */
+  authorizeKeys?: boolean;
 }
 
 export interface LinkState {
   lastSyncAt?: number;
   lastAttemptAt?: number;
   lastError?: string;
+  /** lazybackup server id → last failed key authorization (auto-sync backs off). */
+  authorizeFailures?: Record<string, { at: number; error: string }>;
 }
 
 export const DEFAULT_TTL_SECONDS = 300;
@@ -67,6 +75,14 @@ const envString = (name: string): string | undefined => {
   return value ? value : undefined;
 };
 
+const envFlag = (name: string): boolean | undefined => {
+  const value = envString(name)?.toLowerCase();
+  if (value === undefined) {
+    return undefined;
+  }
+  return !['0', 'false', 'no', 'off'].includes(value);
+};
+
 /** Stored config only (no env overrides). */
 export const readStoredLinkConfig = (): LinkConfig | undefined => {
   const stored = readJson<LinkConfig>(getLinkConfigPath());
@@ -93,6 +109,7 @@ export const loadLinkConfig = (): LinkConfig | undefined => {
     ttlSeconds: ttl !== undefined && Number.isFinite(ttl) && ttl >= 0 ? ttl : DEFAULT_TTL_SECONDS,
     keyMap: Array.isArray(stored?.keyMap) && stored.keyMap.length > 0 ? stored.keyMap : DEFAULT_KEY_MAP,
     vaultKeys: stored?.vaultKeys && typeof stored.vaultKeys === 'object' ? stored.vaultKeys : undefined,
+    authorizeKeys: envFlag('SSHYA_LINK_AUTHORIZE') ?? stored?.authorizeKeys !== false,
   };
 };
 

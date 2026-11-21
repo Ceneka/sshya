@@ -9,9 +9,11 @@ import {
   type KeyMapEntry,
   type LinkConfig,
 } from './config';
+import { ensureDeviceKey, readDeviceKey, type DeviceKey } from './deviceKey';
 import {
   fetchLazybackupSnapshot,
   LinkFetchError,
+  updateAuthorizedKey,
   type FetchLike,
   type LazybackupServer,
   type LazybackupSnapshot,
@@ -19,8 +21,16 @@ import {
 
 export interface SyncWarning {
   alias: string;
-  kind: 'missing_key' | 'vault_key' | 'inline_key' | 'password_auth';
+  kind: 'missing_key' | 'vault_key' | 'inline_key' | 'password_auth' | 'authorize_failed';
   message: string;
+  errorKind?: string;
+}
+
+/** A key-auth server with no usable local key: lazybackup can install ours. */
+export interface PendingAuthorization {
+  serverId: string;
+  alias: string;
+  name: string;
 }
 
 export interface SyncConflict {
@@ -40,6 +50,8 @@ export interface SyncReport {
   unchanged: number;
   conflicts: SyncConflict[];
   warnings: SyncWarning[];
+  /** Aliases where lazybackup just installed this machine's sshya key. */
+  authorized: string[];
 }
 
 /** lazybackup server names are free text; aliases should be shell-friendly. */
@@ -69,6 +81,8 @@ interface Desired {
   port?: string;
   keyPath?: string;
   warning?: SyncWarning;
+  /** No local key resolved for a key-auth server. */
+  needsDeviceKey: boolean;
 }
 
 const describeKey = (
@@ -145,6 +159,9 @@ const describeKey = (
  * - A local, unlinked connection with the same alias but another target is a
  *   conflict: it is left alone and the server is skipped.
  * - Linked connections that disappeared from lazybackup are removed.
+ * - A key-auth server without a usable local key uses this machine's device
+ *   key once lazybackup installed it (`link.deviceKey` matches, or the id is
+ *   in `authorizedIds`); otherwise it is returned in `pending`.
  */
 export const planSync = (
   local: Connection[],
@@ -154,8 +171,10 @@ export const planSync = (
     keyMap?: KeyMapEntry[];
     vaultKeys?: Record<string, string>;
     exists?: (file: string) => boolean;
+    deviceKey?: Pick<DeviceKey, 'path' | 'fingerprint'>;
+    authorizedIds?: ReadonlySet<string>;
   },
-): { next: Connection[]; report: SyncReport } => {
+): { next: Connection[]; report: SyncReport; pending: PendingAuthorization[] } => {
   const keyMap = options.keyMap ?? DEFAULT_KEY_MAP;
   const report: SyncReport = {
     ok: true,
@@ -168,6 +187,27 @@ export const planSync = (
     unchanged: 0,
     conflicts: [],
     warnings: [],
+    authorized: [],
+  };
+  const pending: PendingAuthorization[] = [];
+  const deviceKey = options.deviceKey;
+
+  /**
+   * Key for a server given the fingerprint recorded on its link. Queues the
+   * server for authorization when only the device key could reach it.
+   */
+  const resolveKey = (want: Desired, recorded: string | undefined, alias: string, queue: boolean) => {
+    const fingerprint = deviceKey && options.authorizedIds?.has(want.server.id) ? deviceKey.fingerprint : recorded;
+    if (!want.needsDeviceKey) {
+      return { keyPath: want.keyPath, warning: want.warning, fingerprint };
+    }
+    if (deviceKey && fingerprint === deviceKey.fingerprint) {
+      return { keyPath: deviceKey.path, warning: undefined, fingerprint };
+    }
+    if (queue) {
+      pending.push({ serverId: want.server.id, alias, name: want.server.name });
+    }
+    return { keyPath: undefined, warning: want.warning, fingerprint };
   };
 
   // Stable alias per server: sort by id so duplicate names get the same suffix every time.
@@ -190,6 +230,7 @@ export const planSync = (
         port: portString(server.port),
         keyPath,
         warning,
+        needsDeviceKey: !keyPath && server.authType === 'key',
       };
     });
 
@@ -214,12 +255,14 @@ export const planSync = (
   ];
 
   for (const want of ordered) {
-    const link: ConnectionLink = {
+    const baseLink: ConnectionLink = {
       source: 'lazybackup',
       id: want.server.id,
       name: want.server.name,
       auth: want.server.authType,
     };
+    const withDevice = (fingerprint: string | undefined): ConnectionLink =>
+      fingerprint ? { ...baseLink, deviceKey: fingerprint } : baseLink;
     const existing = byLinkId.get(want.server.id);
     const aliasHolder = next.find(c => c.alias === want.alias && c !== existing);
 
@@ -231,21 +274,21 @@ export const planSync = (
         alias = existing.alias;
       }
       const localKey = existing.link?.localKey === true;
-      const keyPath = localKey ? existing.key_path : want.keyPath;
+      const resolved = resolveKey(want, existing.link?.deviceKey, alias, !localKey);
       const before = JSON.stringify(existing);
       existing.alias = alias;
       existing.user = want.user;
       existing.host = want.host;
       existing.port = want.port;
-      existing.key_path = keyPath;
-      existing.link = { ...link, ...(localKey ? { localKey: true } : {}) };
+      existing.key_path = localKey ? existing.key_path : resolved.keyPath;
+      existing.link = { ...withDevice(resolved.fingerprint), ...(localKey ? { localKey: true } : {}) };
       if (JSON.stringify(existing) === before) {
         report.unchanged++;
       } else {
         report.updated.push(alias);
       }
-      if (want.warning && !localKey) {
-        report.warnings.push({ ...want.warning, alias });
+      if (resolved.warning && !localKey) {
+        report.warnings.push({ ...resolved.warning, alias });
       }
       continue;
     }
@@ -253,13 +296,14 @@ export const planSync = (
     if (aliasHolder) {
       if (!aliasHolder.link && sameTarget(aliasHolder, want)) {
         // Same server already stored locally: adopt it and keep local extras.
-        const keepLocalKey = Boolean(aliasHolder.key_path) && aliasHolder.key_path !== want.keyPath;
-        aliasHolder.key_path = keepLocalKey ? aliasHolder.key_path : want.keyPath;
+        const resolved = resolveKey(want, undefined, want.alias, !aliasHolder.key_path);
+        const keepLocalKey = Boolean(aliasHolder.key_path) && aliasHolder.key_path !== resolved.keyPath;
+        aliasHolder.key_path = keepLocalKey ? aliasHolder.key_path : resolved.keyPath;
         aliasHolder.port = want.port;
-        aliasHolder.link = { ...link, ...(keepLocalKey ? { localKey: true } : {}) };
+        aliasHolder.link = { ...withDevice(resolved.fingerprint), ...(keepLocalKey ? { localKey: true } : {}) };
         report.adopted.push(want.alias);
-        if (want.warning && !keepLocalKey) {
-          report.warnings.push(want.warning);
+        if (resolved.warning && !keepLocalKey) {
+          report.warnings.push(resolved.warning);
         }
         continue;
       }
@@ -273,29 +317,99 @@ export const planSync = (
       continue;
     }
 
+    const resolved = resolveKey(want, undefined, want.alias, true);
     next.push({
       id: nextId++,
       alias: want.alias,
       user: want.user,
       host: want.host,
       port: want.port,
-      key_path: want.keyPath,
-      link,
+      key_path: resolved.keyPath,
+      link: withDevice(resolved.fingerprint),
     });
     report.added.push(want.alias);
-    if (want.warning) {
-      report.warnings.push(want.warning);
+    if (resolved.warning) {
+      report.warnings.push(resolved.warning);
     }
   }
 
-  return { next, report };
+  return { next, report, pending };
 };
 
 export interface SyncOptions {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
   config?: LinkConfig;
+  /**
+   * `all` (explicit sync) tries every pending server; `auto` skips servers
+   * that failed within the last hour and caps the time spent; `off` skips it.
+   */
+  authorize?: 'all' | 'auto' | 'off';
+  /** Test hook: use this key instead of the one next to the store. */
+  deviceKey?: DeviceKey;
 }
+
+/** After a failed authorization, auto-sync leaves that server alone this long. */
+const AUTHORIZE_BACKOFF_MS = 60 * 60_000;
+const AUTHORIZE_TIMEOUT_MS = 45_000;
+const AUTO_AUTHORIZE_BUDGET_MS = 10_000;
+const AUTHORIZE_CONCURRENCY = 4;
+
+interface AuthorizeOutcome {
+  ok: Set<string>;
+  failed: Map<string, Error>;
+}
+
+/**
+ * Ask lazybackup to install the device key on each pending server. A missing
+ * permission or an old lazybackup fails every server the same way, so the
+ * first such error stops further requests.
+ */
+const authorizeServers = async (
+  config: LinkConfig,
+  pending: PendingAuthorization[],
+  deviceKey: DeviceKey,
+  options: { budgetMs?: number; fetchImpl?: FetchLike },
+): Promise<AuthorizeOutcome> => {
+  const outcome: AuthorizeOutcome = { ok: new Set(), failed: new Map() };
+  const deadline = options.budgetMs ? Date.now() + options.budgetMs : undefined;
+  let fatal: Error | undefined;
+  const queue = [...pending];
+  const worker = async () => {
+    for (let item = queue.shift(); item; item = queue.shift()) {
+      const remaining = deadline ? deadline - Date.now() : AUTHORIZE_TIMEOUT_MS;
+      if (fatal || remaining <= 0) {
+        outcome.failed.set(item.serverId, fatal ?? new Error('Skipped: auto-sync ran out of time; `sshya sync` retries it.'));
+        continue;
+      }
+      try {
+        await updateAuthorizedKey(config, item.serverId, deviceKey.publicKey, 'authorize', {
+          timeoutMs: Math.min(remaining, AUTHORIZE_TIMEOUT_MS),
+          fetchImpl: options.fetchImpl,
+        });
+        outcome.ok.add(item.serverId);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (err instanceof LinkFetchError && ['link_forbidden', 'link_unsupported', 'link_unauthorized', 'link_access_blocked'].includes(err.errorKind)) {
+          fatal = error;
+        }
+        outcome.failed.set(item.serverId, error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(AUTHORIZE_CONCURRENCY, pending.length) }, worker));
+  return outcome;
+};
+
+const authorizeWarning = (alias: string, err: Error): SyncWarning => {
+  const hint = err instanceof LinkFetchError && err.hint ? ` ${err.hint}` : '';
+  return {
+    alias,
+    kind: 'authorize_failed',
+    message: `lazybackup could not install this machine's sshya key: ${err.message}${hint}`,
+    ...(err instanceof LinkFetchError ? { errorKind: err.errorKind } : {}),
+  };
+};
 
 /** Fetch from lazybackup and rewrite the local store. Throws LinkFetchError. */
 export const syncLink = async (options: SyncOptions = {}): Promise<SyncReport> => {
@@ -306,12 +420,61 @@ export const syncLink = async (options: SyncOptions = {}): Promise<SyncReport> =
   const attemptAt = Date.now();
   try {
     const snapshot = await fetchLazybackupSnapshot(config, { timeoutMs: options.timeoutMs, fetchImpl: options.fetchImpl });
-    const { next, report } = planSync(getConnections(), snapshot, { url: config.url, keyMap: config.keyMap, vaultKeys: config.vaultKeys });
+    const local = getConnections();
+    const planOptions = { url: config.url, keyMap: config.keyMap, vaultKeys: config.vaultKeys };
+    let deviceKey = options.deviceKey ?? readDeviceKey();
+    let { next, report, pending } = planSync(local, snapshot, { ...planOptions, deviceKey });
+
+    const pendingIds = new Set(pending.map(item => item.serverId));
+    const failures = Object.fromEntries(
+      Object.entries(readLinkState().authorizeFailures ?? {}).filter(([id]) => pendingIds.has(id)),
+    );
+    const mode = options.authorize ?? 'all';
+    if (mode !== 'off' && config.authorizeKeys !== false && pending.length > 0) {
+      const now = Date.now();
+      const due = mode === 'auto'
+        ? pending.filter(item => !failures[item.serverId] || now - failures[item.serverId]!.at >= AUTHORIZE_BACKOFF_MS)
+        : pending;
+      if (due.length > 0) {
+        let outcome: AuthorizeOutcome;
+        try {
+          deviceKey = deviceKey ?? ensureDeviceKey();
+          outcome = await authorizeServers(config, due, deviceKey, {
+            budgetMs: mode === 'auto' ? AUTO_AUTHORIZE_BUDGET_MS : undefined,
+            fetchImpl: options.fetchImpl,
+          });
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          outcome = { ok: new Set(), failed: new Map(due.map(item => [item.serverId, error])) };
+        }
+        if (outcome.ok.size > 0) {
+          ({ next, report } = planSync(local, snapshot, { ...planOptions, deviceKey, authorizedIds: outcome.ok }));
+        }
+        const at = Date.now();
+        for (const item of due) {
+          const error = outcome.failed.get(item.serverId);
+          if (outcome.ok.has(item.serverId)) {
+            report.authorized.push(item.alias);
+            delete failures[item.serverId];
+          } else if (error) {
+            failures[item.serverId] = { at, error: error.message };
+            report.warnings = report.warnings.map(warning =>
+              warning.alias === item.alias ? authorizeWarning(item.alias, error) : warning,
+            );
+          }
+        }
+      }
+    }
+
     const changed = report.added.length + report.updated.length + report.removed.length + report.adopted.length > 0;
     if (changed) {
       replaceConnections(next);
     }
-    writeLinkState({ lastSyncAt: Date.now(), lastAttemptAt: attemptAt });
+    writeLinkState({
+      lastSyncAt: Date.now(),
+      lastAttemptAt: attemptAt,
+      ...(Object.keys(failures).length > 0 ? { authorizeFailures: failures } : {}),
+    });
     return report;
   } catch (err) {
     const previous = readLinkState();
@@ -355,7 +518,7 @@ export const autoSync = async (options: { onError?: (err: unknown) => void; fetc
     return undefined;
   }
   try {
-    return await syncLink({ config, timeoutMs: AUTO_SYNC_TIMEOUT_MS, fetchImpl: options.fetchImpl });
+    return await syncLink({ config, timeoutMs: AUTO_SYNC_TIMEOUT_MS, fetchImpl: options.fetchImpl, authorize: 'auto' });
   } catch (err) {
     options.onError?.(err);
     return undefined;

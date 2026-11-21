@@ -16,8 +16,10 @@ import {
 import { loadLinkConfig, readLinkState, resolveLocalKeyPath, saveLinkConfig } from './config';
 import { fetchLazybackupSnapshot, LinkFetchError, type FetchLike, type LazybackupServer } from './lazybackup';
 import { aliasFromName, autoSync, planSync, syncLink } from './sync';
+import { ensureDeviceKey, getDeviceKeyPath, publicKeyFingerprint, readDeviceKey } from './deviceKey';
+import { execFileSync } from 'child_process';
 
-const ENV_KEYS = ['SSHYA_DB', 'SSHYA_LINK_URL', 'SSHYA_LINK_TOKEN', 'SSHYA_LINK_TTL', 'SSHYA_LINK_AUTO'] as const;
+const ENV_KEYS = ['SSHYA_DB', 'SSHYA_LINK_URL', 'SSHYA_LINK_TOKEN', 'SSHYA_LINK_TTL', 'SSHYA_LINK_AUTO', 'SSHYA_LINK_AUTHORIZE'] as const;
 let savedEnv: Record<string, string | undefined>;
 let tempDir: string;
 
@@ -244,7 +246,8 @@ describe('syncLink / autoSync', () => {
 
     addConnection('mine', 'u', 'h');
     let calls = 0;
-    const fetchImpl: FetchLike = async () => {
+    const fetchImpl: FetchLike = async url => {
+      if (!url.endsWith('/api/servers')) return jsonResponse({ ok: true, status: 'added' });
       calls++;
       return jsonResponse([server()]);
     };
@@ -279,5 +282,175 @@ describe('syncLink / autoSync', () => {
     let calls = 0;
     await autoSync({ fetchImpl: async () => { calls++; return jsonResponse([]); } });
     expect(calls).toBe(0);
+  });
+});
+
+describe('device key', () => {
+  test('is generated once next to the store, 0600, with a matching fingerprint', () => {
+    const key = ensureDeviceKey();
+    expect(key.path).toBe(path.join(tempDir, 'keys', 'id_ed25519'));
+    expect(getDeviceKeyPath()).toBe(key.path);
+    expect(fs.statSync(key.path).mode & 0o777).toBe(0o600);
+    expect(key.publicKey).toMatch(/^ssh-ed25519 \S+ sshya(@[A-Za-z0-9._-]+)?$/);
+    const expected = execFileSync('ssh-keygen', ['-lf', `${key.path}.pub`], { encoding: 'utf8' }).split(' ')[1]!;
+    expect(key.fingerprint).toBe(expected);
+    expect(publicKeyFingerprint(key.publicKey)).toBe(expected);
+    expect(ensureDeviceKey()).toEqual(key);
+  });
+});
+
+describe('planSync with the device key', () => {
+  const vault = server({ id: 'v', name: 'vault', systemKeyPath: null, sshKeyId: 'k1' });
+  const snapshot = { servers: [vault], keys: [{ id: 'k1', name: 'LazyBackup' }] };
+  const deviceKey = { path: '/state/keys/id_ed25519', fingerprint: 'SHA256:dev' };
+
+  test('queues servers without a local key and keeps the warning', () => {
+    const { next, report, pending } = planSync([], snapshot, { url: 'x', exists: noFiles, deviceKey });
+    expect(pending).toEqual([{ serverId: 'v', alias: 'vault', name: 'vault' }]);
+    expect(next[0]?.key_path).toBeUndefined();
+    expect(report.warnings[0]?.kind).toBe('vault_key');
+  });
+
+  test('uses the device key once authorized, and remembers it', () => {
+    const first = planSync([], snapshot, { url: 'x', exists: noFiles, deviceKey, authorizedIds: new Set(['v']) });
+    expect(first.pending).toEqual([]);
+    expect(first.report.warnings).toEqual([]);
+    expect(first.next[0]).toMatchObject({ key_path: deviceKey.path, link: { deviceKey: 'SHA256:dev' } });
+
+    const again = planSync(first.next, snapshot, { url: 'x', exists: noFiles, deviceKey });
+    expect(again.pending).toEqual([]);
+    expect(again.report.unchanged).toBe(1);
+  });
+
+  test('a mapped or local key wins and nothing is queued', () => {
+    const keyFile = path.join(home, '.ssh', 'mine');
+    const mapped = planSync([], snapshot, { url: 'x', vaultKeys: { k1: keyFile }, exists: onlyFiles(keyFile), deviceKey });
+    expect(mapped.pending).toEqual([]);
+    expect(mapped.next[0]?.key_path).toBe(keyFile);
+
+    const local: Connection[] = [{
+      id: 1, alias: 'vault', user: 'root', host: '10.0.0.1', key_path: '/keys/mine',
+      link: { source: 'lazybackup', id: 'v', localKey: true },
+    }];
+    expect(planSync(local, snapshot, { url: 'x', exists: noFiles, deviceKey }).pending).toEqual([]);
+  });
+
+  test('a regenerated device key is queued again', () => {
+    const local: Connection[] = [{
+      id: 1, alias: 'vault', user: 'root', host: '10.0.0.1', key_path: '/old/key',
+      link: { source: 'lazybackup', id: 'v', deviceKey: 'SHA256:old' },
+    }];
+    const { pending } = planSync(local, snapshot, { url: 'x', exists: noFiles, deviceKey });
+    expect(pending.map(item => item.serverId)).toEqual(['v']);
+  });
+
+  test('password servers are never queued', () => {
+    const { pending } = planSync([], { servers: [server({ authType: 'password', systemKeyPath: null })], keys: [] }, { url: 'x', exists: noFiles, deviceKey });
+    expect(pending).toEqual([]);
+  });
+});
+
+describe('syncLink key authorization', () => {
+  const vaultServers = [
+    server({ id: 'v1', name: 'vault one', systemKeyPath: null, sshKeyId: 'k1' }),
+    server({ id: 'v2', name: 'vault two', systemKeyPath: null, sshKeyId: 'k1' }),
+  ];
+
+  const lazybackup = (authorize: (id: string, body: { publicKey: string }, method: string) => Response) => {
+    const calls: Array<{ url: string; method: string; body?: { publicKey: string } }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url, method, body });
+      if (url.endsWith('/api/servers')) return jsonResponse(vaultServers);
+      if (url.endsWith('/api/ssh-keys')) return jsonResponse({ storedKeys: [{ id: 'k1', name: 'LazyBackup' }] });
+      const match = url.match(/\/api\/servers\/([^/]+)\/authorize-key$/);
+      if (match) return authorize(decodeURIComponent(match[1]!), body, method);
+      return new Response('<html>404</html>', { status: 404, headers: { 'content-type': 'text/html' } });
+    };
+    return { fetchImpl, calls, authorizeCalls: () => calls.filter(call => call.url.includes('/authorize-key')) };
+  };
+
+  test('generates the device key, has lazybackup install it, and uses it', async () => {
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok' });
+    const lb = lazybackup(() => jsonResponse({ ok: true, status: 'added' }));
+    const report = await syncLink({ fetchImpl: lb.fetchImpl });
+
+    const key = readDeviceKey();
+    expect(key).toBeDefined();
+    expect(report.authorized).toEqual(['vault-one', 'vault-two']);
+    expect(report.warnings).toEqual([]);
+    expect(lb.authorizeCalls().map(call => [call.method, call.body?.publicKey])).toEqual([
+      ['POST', key!.publicKey],
+      ['POST', key!.publicKey],
+    ]);
+    expect(getConnections().map(c => [c.alias, c.key_path, c.link?.deviceKey])).toEqual([
+      ['vault-one', key!.path, key!.fingerprint],
+      ['vault-two', key!.path, key!.fingerprint],
+    ]);
+
+    // Already authorized: the next sync makes no authorize calls.
+    const before = lb.authorizeCalls().length;
+    const second = await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(second.authorized).toEqual([]);
+    expect(second.unchanged).toBe(2);
+    expect(lb.authorizeCalls().length).toBe(before);
+  });
+
+  test('a token without authorize_keys fails once, warns, and auto-sync backs off', async () => {
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok', ttlSeconds: 1 });
+    const lb = lazybackup(() => jsonResponse({ error: 'API token lacks authorize_keys permission.' }, { status: 403 }));
+    const report = await syncLink({ fetchImpl: lb.fetchImpl });
+
+    // The first forbidden answer stops the rest.
+    expect(lb.authorizeCalls().length).toBeLessThanOrEqual(2);
+    expect(report.authorized).toEqual([]);
+    expect(report.warnings.map(w => [w.alias, w.kind, w.errorKind])).toEqual([
+      ['vault-one', 'authorize_failed', 'link_forbidden'],
+      ['vault-two', 'authorize_failed', 'link_forbidden'],
+    ]);
+    expect(report.warnings[0]?.message).toContain('Allow authorizing SSH keys');
+    expect(Object.keys(readLinkState().authorizeFailures ?? {}).sort()).toEqual(['v1', 'v2']);
+    expect(getConnections().every(c => c.key_path === undefined)).toBe(true);
+
+    // Auto-sync within the backoff window does not retry; an explicit sync does.
+    const calls = lb.authorizeCalls().length;
+    const state = readLinkState();
+    fs.writeFileSync(path.join(tempDir, 'link-state.json'), JSON.stringify({ ...state, lastSyncAt: 0 }));
+    expect(await autoSync({ fetchImpl: lb.fetchImpl })).toBeDefined();
+    expect(lb.authorizeCalls().length).toBe(calls);
+    await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(lb.authorizeCalls().length).toBeGreaterThan(calls);
+  });
+
+  test('an old lazybackup that blocks read_only tokens is reported as unsupported', async () => {
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok' });
+    const lb = lazybackup(() => jsonResponse({ error: 'API token is read_only' }, { status: 403 }));
+    const report = await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(report.warnings[0]).toMatchObject({ kind: 'authorize_failed', errorKind: 'link_unsupported' });
+  });
+
+  test('one unreachable server does not block the others', async () => {
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok' });
+    const lb = lazybackup(id => id === 'v1'
+      ? jsonResponse({ error: 'Could not update authorized_keys on vault one: connect ETIMEDOUT' }, { status: 502 })
+      : jsonResponse({ ok: true, status: 'present' }));
+    const report = await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(report.authorized).toEqual(['vault-two']);
+    expect(report.warnings).toMatchObject([{ alias: 'vault-one', kind: 'authorize_failed', errorKind: 'link_authorize_failed' }]);
+    expect(report.warnings[0]?.message).toContain('ETIMEDOUT');
+  });
+
+  test('authorizeKeys: false and SSHYA_LINK_AUTHORIZE=0 make no requests', async () => {
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok', authorizeKeys: false });
+    const lb = lazybackup(() => jsonResponse({ ok: true, status: 'added' }));
+    await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(lb.authorizeCalls()).toEqual([]);
+    expect(readDeviceKey()).toBeUndefined();
+
+    saveLinkConfig({ url: 'https://lb.test', token: 'tok' });
+    process.env.SSHYA_LINK_AUTHORIZE = '0';
+    await syncLink({ fetchImpl: lb.fetchImpl });
+    expect(lb.authorizeCalls()).toEqual([]);
   });
 });
