@@ -51,6 +51,11 @@ export interface ConnectionLink {
   auth?: 'key' | 'password';
   /** True once the key path was overridden locally; sync stops touching it. */
   localKey?: boolean;
+  /**
+   * Fingerprint (`SHA256:…`) of this machine's sshya key once lazybackup
+   * installed it in the server's authorized_keys (`src/link/deviceKey.ts`).
+   */
+  deviceKey?: string;
 }
 
 /** Thrown when a local mutation targets a field owned by the linked store. */
@@ -79,6 +84,7 @@ const normalizeLink = (link: unknown): ConnectionLink | undefined => {
     ...(typeof value.name === 'string' && value.name ? { name: value.name } : {}),
     ...(value.auth === 'key' || value.auth === 'password' ? { auth: value.auth } : {}),
     ...(value.localKey === true ? { localKey: true } : {}),
+    ...(typeof value.deviceKey === 'string' && value.deviceKey ? { deviceKey: value.deviceKey } : {}),
   };
 };
 

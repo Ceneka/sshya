@@ -417,6 +417,8 @@ link
   .option('--cf-client-id <id>', 'Cloudflare Access service token client id')
   .option('--cf-client-secret <secret>', 'Cloudflare Access service token client secret')
   .option('--ttl <seconds>', 'Auto-sync freshness window (0 disables auto-sync, default 300)')
+  .option('--authorize', 'Let lazybackup install this machine\'s sshya key where no local key exists (default)')
+  .option('--no-authorize', 'Never ask lazybackup to install the sshya key')
   .option('--no-sync', 'Save the link without syncing now')
   .option('--json', 'Machine-readable JSON output')
   .action(async (url: string | undefined, options) => (await import('./src/link/commands')).linkSetCommand(url, options));
@@ -436,6 +438,12 @@ link
   .option('--json', 'Machine-readable JSON output')
   .action(async (key: string | undefined, keyPath: string | undefined, options: { unset?: boolean; json?: boolean }) =>
     (await import('./src/link/commands')).linkKeyCommand(key, keyPath, options));
+
+link
+  .command('revoke')
+  .description('Remove this machine\'s sshya key from every linked server and stop authorizing it')
+  .option('--json', 'Machine-readable JSON output')
+  .action(async (options: { json?: boolean }) => (await import('./src/link/commands')).linkRevokeCommand(options));
 
 link
   .command('unset')

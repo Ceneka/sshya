@@ -14,7 +14,8 @@ import {
 } from './config';
 import fs from 'fs';
 import { expandHomePath } from '../database';
-import { fetchLazybackupSnapshot, LinkFetchError, type LazybackupSshKey } from './lazybackup';
+import { getDeviceKeyPath, readDeviceKey } from './deviceKey';
+import { fetchLazybackupSnapshot, LinkFetchError, updateAuthorizedKey, type LazybackupSshKey } from './lazybackup';
 import { autoSync, syncLink, type SyncReport } from './sync';
 
 const readStdin = async (): Promise<string> => {
@@ -46,6 +47,7 @@ const printReport = (report: SyncReport): void => {
     report.updated.length ? chalk.cyan(`~${report.updated.length} updated`) : '',
     report.adopted.length ? chalk.cyan(`${report.adopted.length} adopted`) : '',
     report.removed.length ? chalk.red(`-${report.removed.length} removed`) : '',
+    report.authorized.length ? chalk.green(`${report.authorized.length} key(s) authorized`) : '',
   ].filter(Boolean);
   console.log(
     `Synced ${report.total} server(s) from ${report.url}: ${changes.length ? changes.join(', ') : 'no changes'}`,
@@ -54,6 +56,9 @@ const printReport = (report: SyncReport): void => {
   for (const alias of report.updated) console.log(chalk.cyan(`  ~ ${alias}`));
   for (const alias of report.adopted) console.log(chalk.cyan(`  = ${alias} (existing local connection now linked)`));
   for (const alias of report.removed) console.log(chalk.red(`  - ${alias}`));
+  for (const alias of report.authorized) {
+    console.log(chalk.green(`  🔑 ${alias} (lazybackup installed ${getDeviceKeyPath()}.pub)`));
+  }
   for (const conflict of report.conflicts) {
     console.log(chalk.yellow(`  ! ${conflict.alias} (${conflict.name}): ${conflict.reason}`));
   }
@@ -68,6 +73,8 @@ export interface LinkSetOptions {
   cfClientId?: string;
   cfClientSecret?: string;
   ttl?: string;
+  /** undefined keeps the stored choice (default on). */
+  authorize?: boolean;
   sync?: boolean;
   json?: boolean;
 }
@@ -107,6 +114,8 @@ export async function linkSetCommand(url: string | undefined, options: LinkSetOp
       : {}),
     ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
     ...(keep?.keyMap ? { keyMap: keep.keyMap } : {}),
+    ...(keep?.vaultKeys ? { vaultKeys: keep.vaultKeys } : {}),
+    ...((options.authorize ?? previous?.authorizeKeys) === false ? { authorizeKeys: false } : {}),
   };
   if (Boolean(config.cfAccessClientId) !== Boolean(config.cfAccessClientSecret)) {
     failLink(json, new Error('--cf-client-id and --cf-client-secret must be set together.'));
@@ -155,7 +164,9 @@ export async function linkShowCommand(options: { json?: boolean } = {}): Promise
   const json = jsonEnabled(options.json);
   const config = loadLinkConfig();
   const state = readLinkState();
-  const linked = getConnections().filter(connection => connection.link).length;
+  const linkedConnections = getConnections().filter(connection => connection.link);
+  const linked = linkedConnections.length;
+  const deviceKey = readDeviceKey();
   if (!config) {
     if (json) {
       printJson({ ok: true, linked: false });
@@ -174,6 +185,14 @@ export async function linkShowCommand(options: { json?: boolean } = {}): Promise
     ttlSeconds: config.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     keyMap: config.keyMap,
     vaultKeys: config.vaultKeys,
+    authorizeKeys: config.authorizeKeys !== false,
+    deviceKey: deviceKey
+      ? {
+          path: deviceKey.path,
+          fingerprint: deviceKey.fingerprint,
+          servers: linkedConnections.filter(c => c.link?.deviceKey === deviceKey.fingerprint).map(c => c.alias),
+        }
+      : undefined,
     connections: linked,
     lastSyncAt: state.lastSyncAt ? new Date(state.lastSyncAt).toISOString() : undefined,
     lastError: state.lastError,
@@ -194,11 +213,71 @@ export async function linkShowCommand(options: { json?: boolean } = {}): Promise
   if (vaultCount > 0) {
     console.log(chalk.grey(`  vault keys:  ${vaultCount} mapped (sshya link key)`));
   }
+  if (payload.deviceKey) {
+    console.log(chalk.grey(`  sshya key:   ${payload.deviceKey.path} (${payload.deviceKey.fingerprint})`));
+    console.log(chalk.grey(`               installed on ${payload.deviceKey.servers.length} server(s)${payload.authorizeKeys ? '' : '; authorizing is off'}`));
+  } else {
+    console.log(chalk.grey(`  sshya key:   ${payload.authorizeKeys ? 'created on the first server that needs it' : 'off'}`));
+  }
   console.log(chalk.grey(`  connections: ${linked} linked`));
   console.log(chalk.grey(`  last sync:   ${payload.lastSyncAt ?? 'never'}`));
   if (payload.lastError) {
     console.log(chalk.yellow(`  last error:  ${payload.lastError}`));
   }
+}
+
+/**
+ * Remove this machine's key from every linked server lazybackup installed it
+ * on, and turn authorizing off so the next sync does not put it back.
+ */
+export async function linkRevokeCommand(options: { json?: boolean } = {}): Promise<void> {
+  const json = jsonEnabled(options.json);
+  const config = loadLinkConfig();
+  const stored = readStoredLinkConfig();
+  if (!config || !stored) {
+    failLink(json, new Error('No lazybackup link configured. Run `sshya link set <url> --token <token>` first.'));
+    return;
+  }
+  saveLinkConfig({ ...stored, authorizeKeys: false });
+
+  const deviceKey = readDeviceKey();
+  const connections = getConnections();
+  const targets = deviceKey ? connections.filter(c => c.link?.deviceKey === deviceKey.fingerprint) : [];
+  const revoked: string[] = [];
+  const failed: Array<{ alias: string; error: string; errorKind?: string }> = [];
+  for (const connection of targets) {
+    try {
+      await updateAuthorizedKey(config, connection.link!.id, deviceKey!.publicKey, 'revoke');
+      revoked.push(connection.alias);
+      const { deviceKey: _fingerprint, ...rest } = connection.link!;
+      connection.link = rest;
+      if (!rest.localKey && connection.key_path === deviceKey!.path) {
+        connection.key_path = undefined;
+      }
+    } catch (err) {
+      failed.push({
+        alias: connection.alias,
+        error: err instanceof Error ? err.message : String(err),
+        ...(err instanceof LinkFetchError ? { errorKind: err.errorKind } : {}),
+      });
+    }
+  }
+  if (revoked.length > 0) {
+    replaceConnections(connections);
+  }
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+  if (json) {
+    printJson({ ok: failed.length === 0, authorizeKeys: false, revoked, failed });
+    return;
+  }
+  if (targets.length === 0) {
+    console.log('No linked server has this machine\'s sshya key.');
+  }
+  for (const alias of revoked) console.log(chalk.green(`  - ${alias}: key removed`));
+  for (const item of failed) console.log(chalk.red(`  ! ${item.alias}: ${item.error}`));
+  console.log(chalk.grey('Authorizing is now off; turn it back on with `sshya link set --authorize`.'));
 }
 
 export async function linkUnsetCommand(options: { purge?: boolean; json?: boolean } = {}): Promise<void> {

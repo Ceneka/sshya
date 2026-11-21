@@ -389,7 +389,8 @@ the single place where servers are managed. sshya pulls them over the API and
 keeps a local cache, so `s`, `run`, and MCP keep working offline.
 
 ```bash
-# lazybackup → Settings → API / MCP → create a token (read_only is enough)
+# lazybackup → Settings → API / MCP → create a token
+# (Read only + "Allow authorizing SSH keys" so sshya can reach every server)
 sshya link set https://backup.example.com --token lb_xxx
 # behind Cloudflare Access: add a service token
 sshya link set https://backup.example.com --token lb_xxx \
@@ -398,7 +399,8 @@ sshya link set https://backup.example.com --token lb_xxx \
 pass lazybackup/token | sshya link set https://backup.example.com --token-stdin
 
 sshya sync          # pull now (also runs automatically every 5 min when used)
-sshya link show     # URL, masked secrets, last sync / last error
+sshya link show     # URL, masked secrets, sshya key, last sync / last error
+sshya link revoke   # remove this machine's sshya key from every server, stop authorizing
 sshya link unset    # stop syncing; linked entries become local (--purge deletes them)
 ```
 
@@ -407,9 +409,16 @@ How it maps:
 - The alias is the lazybackup server name, slugified (`Web Prod` → `web-prod`).
 - Keys: lazybackup's `systemKeyPath` (or a stored key's path) is translated from
   the container mount `/root/.ssh` to `~/.ssh`, falling back to
-  `~/.ssh/<basename>`. Keys pasted into lazybackup are never exported: map each
-  one once per machine with `sshya link key <id|name> <path>` and every server
-  using it picks it up (`sshya link key` lists keys, their servers, and mappings).
+  `~/.ssh/<basename>`. Keys stored or generated inside lazybackup are never
+  exported. When a server's key is not on this machine, sshya creates its own
+  key (`~/.sshya/keys/id_ed25519`) and asks lazybackup to add the public half to
+  that server's `~/.ssh/authorized_keys` with the credentials lazybackup already
+  holds. This needs a token with `authorize_keys` (it combines with read_only)
+  and happens once per server, also for servers added later in the web UI.
+  Opt out with `sshya link set --no-authorize` (or `SSHYA_LINK_AUTHORIZE=0`).
+  You can still map a stored key once per machine with
+  `sshya link key <id|name> <path>`, and every server using it picks it up
+  (`sshya link key` lists keys, their servers, and mappings).
   `sshya update <alias> --key <path>` still overrides a single connection.
 - Linked connections are read-only for alias/user/host/port and cannot be
   removed locally (`errorKind: linked_connection`). `key_path`, `remote_path`,
